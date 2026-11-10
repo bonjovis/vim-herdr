@@ -1,0 +1,215 @@
+*myvim.txt*  *my*  *myvim*  *mykeys*  *herdr*  个人 Vim + Herdr 开发环境速查手册
+
+==============================================================================
+目录                                                             *myvim-toc*
+
+  1. 核心快捷键一屏速查 ............................ |myvim-cheatsheet|
+  2. LSP 代码导航与调用路径 ........................ |myvim-lsp|
+  3. 搜索（fzf + ripgrep） ......................... |myvim-search|
+  4. 文件树（fern.vim）与符号大纲（tagbar） ........ |myvim-tree|
+  5. 文件内跳转（vim-sneak）与常用杂项 ............. |myvim-misc|
+  6. Herdr 终端增强（Open in Vim / Search in Vim）.. |myvim-herdr|
+  7. 维护、插件与排错指南 .......................... |myvim-maint|
+
+  提示：在帮助窗口中按 `q` 可直接关闭窗口；也可随时执行 `:Keys`、`:MyHelp`、
+        `:Readme` 或按 `<Space>?` 打开本手册。
+
+==============================================================================
+1. 核心快捷键一屏速查                                       *myvim-cheatsheet*
+
+  Leader 键为【空格】(`<Space>`)。下表中 `<leader>` 即空格键。
+
+  【Herdr 终端全局快捷键（所有智能体/终端通用）】
+  Alt + V (或 Ctrl+Shift+G)  打开选中的代码文件及行号 (Open in Vim)
+  Alt + F                    在当前目录下全文搜索选中的文字 (Search in Vim)
+  Ctrl + Shift + C / V       终端复制 / 粘贴
+  Shift + 鼠标左键拖选       在接管鼠标的程序（Vim/Claude等）中选中文本
+  Shift + 鼠标右键           打开 Herdr 右键菜单
+
+  【LSP 代码导航與调用链】
+  gd                         跳转到定义 (Definition)
+  gD                         跳转到声明 (Declaration)
+  gr                         所有调用路径/引用列表（FZF 弹窗 + 右侧代码预览 + 外层方法名）
+  gi                         所有接口/抽象方法的具体实现列表（FZF 弹窗 + 右侧代码预览）
+  <Space>ci                  上游调用链 Incoming Calls：谁调用了当前方法（FZF + 预览）
+  <Space>cg                  下游调用链 Outgoing Calls：当前方法调用了谁（FZF + 预览）
+  <Space>ct                  在底部 quickfix 逐层向上展开多层调用树
+  gy                         跳转到类型定义 (Type Definition)
+  K 或 Ctrl-k                悬浮查看文档 / 函数签名
+  Ctrl-o / Ctrl-i            跳转后返回上一位置 / 前进到下一位置
+  <Space>rn                  跨文件重命名符号 (Rename)
+  <Space>ca                  代码操作 (Code Action / 自动导入 / Quick Fix)
+  <Space>d                   当前文件符号列表
+  <Space>s                   全项目符号搜索
+  <Space>lf                  格式化当前文件
+  ]g / [g                    下一个 / 上一个错误或警告
+
+  【FZF 搜索（文件 / 全文 / Buffer / 符号）】
+  <Space>ff                  按文件名模糊搜索 (rg --files)
+  <Space>fg (Normal 模式)    全项目交互式全文搜索 (ripgrep + 右侧预览)
+  <Space>fg (Visual 选中后)  直接用选中文字在当前项目根下全文搜索
+  <Space>fb                  已打开的 Buffer 列表
+  <Space>fh                  最近打开的文件历史
+  <Space>fl                  当前文件内行搜索
+  <Space>ft / <Space>fT      当前文件 / 全项目 ctags 符号搜索
+  <Space>fw                  当前窗口列表
+
+  【侧边栏 / 快速跳转 / 常用操作】
+  F9                         打开/关闭左侧 fern 文件树（以工作目录为根）
+  <Space>e                   打开左侧文件树并定位到当前文件所在位置
+  F8                         打开/关闭右侧 tagbar 函数/类大纲
+  s + 两个字符 / S + 两字符  向后 / 向前两键精准跳转 (vim-sneak)，`;` / `,` 翻页
+  <Space>w / <Space>q        快速保存 (`:w`) / 退出 (`:q`)
+  <Space>co / <Space>cc      打开 / 关闭底部 quickfix 列表
+  <Space>?                   打开本快捷键速查帮助（按 `q` 关闭）
+
+==============================================================================
+2. LSP 代码导航与调用路径                                         *myvim-lsp*
+
+  在有 LSP server 的代码文件（Go / Java / PHP / TS / JS）中自动生效：
+
+  按键          功能说明 ~
+  ----------------------------------------------------------------------------
+  `gd`          转到定义（go to definition）
+  `gD`          转到声明（declaration）
+  `gr`          所有调用路径 / 引用列表（FZF 弹窗 + 右侧代码预览 + 自动标注
+                外层调用方法名 `[CallerFunc]`，按 `Enter` 直接跳转）
+  `gi`          接口/抽象方法的所有具体实现列表（FZF 弹窗 + 右侧代码预览，
+                选中按 `Enter` 切换到具体实现类）
+  `<leader>ci`  调用层级（上游 Incoming Calls）：谁调用了当前方法（FZF 弹窗 +
+                代码预览，语言不支持 CallHierarchy 时自动回退 `gr`）
+  `<leader>cg`  调用层级（下游 Outgoing Calls）：当前方法内部调用了哪些方法
+  `<leader>ct`  多层调用树展开：在底部 quickfix 窗口逐层向上追加调用链树
+                （`:LspAddTreeCallHierarchyIncoming`）
+  `gy`          转到类型定义
+  `K` / `<C-k>` 悬浮显示文档 / 类型信息
+  `<leader>rn`  重命名符号（跨文件）
+  `<leader>ca`  代码操作（quick fix / 自动导入等）
+  `<leader>d`   当前文件符号列表（跳到函数/类）
+  `<leader>s`   全项目符号搜索
+  `<leader>lf`  格式化当前文件
+  `<leader>pd`  预览定义（不跳走）
+  `<leader>pr`  预览引用
+  `]g` / `[g`   下一个 / 上一个错误或警告
+
+  FZF 调用路径窗口操作说明：
+  - 左侧列表显示 `相对路径:行号:列号: [调用方方法名] 代码行`，可直接打字过滤。
+  - 右侧窗口实时高亮预览目标文件对应行的代码上下文（`Ctrl-/` 切换预览）。
+  - 按 `Enter` 立即跳转到目标调用处或实现类，看毕按 `Ctrl-o` 原路返回。
+
+==============================================================================
+3. 搜索（fzf + ripgrep）                                       *myvim-search*
+
+  按键                    功能说明 ~
+  ----------------------------------------------------------------------------
+  `<leader>ff`            找文件（`rg --files`，自动忽略 `.git` / `.gitignore`）
+  `<leader>fg` (Normal)   全项目全文搜索（按项目根 / 文件树根搜索）
+  `<leader>fg` (Visual)   将当前可视模式选中的文字在项目根下全文搜索
+  `<leader>fb`            已打开的 buffer 列表
+  `<leader>fh`            最近打开的文件历史
+  `<leader>fl`            当前文件内的行搜索
+  `<leader>ft`            当前文件的函数/符号（基于 tags）
+  `<leader>fT`            全项目函数/符号（基于 tags）
+  `<leader>fw`            窗口列表
+
+  fzf 窗口内按键：`Ctrl-/` 切换预览，`Enter` 打开，`Ctrl-c` / `Esc` 取消。
+
+  批量搜索与替换（基于 quickfix）： >
+    :grep 关键字                  " 使用 ripgrep 搜索，结果进入 quickfix
+    :copen                        " 或按 <leader>co 打开列表
+    :cfdo %s/旧/新/g | update     " 跨文件批量替换并保存
+<
+
+==============================================================================
+4. 文件树（fern.vim）与符号大纲（tagbar）                        *myvim-tree*
+
+  按键 / 命令             功能说明 ~
+  ----------------------------------------------------------------------------
+  `F9`                    打开/关闭左侧文件树（以 Vim 当前工作目录为根）
+  `<leader>e`             以当前文件所在目录为根打开文件树，并定位到当前文件
+  `F8`                    打开/关闭右侧 tagbar 符号大纲
+  `:GutentagsUpdate`      强制重新生成当前项目的 tags
+
+  fern 文件树窗口内的常用按键：
+  - `Enter` 或 `l`        打开文件；目录则展开
+  - `Backspace` 或 `<C-h>` 返回上一级目录（把父目录作为新的根）
+  - `h`                   折叠当前目录
+  - `N` / `K`             新建文件 / 新建目录
+  - `R`                   重命名
+  - `c` / `m`             复制 / 移动（输入目标路径）
+  - `C` / `M` / `P`       复制 / 移动 / 粘贴（fern 内部剪贴板）
+  - `y`                   把节点的完整路径复制到寄存器
+  - `D`                   移入回收站（需 `trash-cli`）
+  - `!`                   显示/隐藏以 `.` 开头的隐藏文件
+  - `z` / `Z`             放大文件树 / 恢复 30 列
+  - `F5` / `?`            刷新目录 / 查看全部按键说明
+
+==============================================================================
+5. 文件内跳转（vim-sneak）与常用杂项                             *myvim-misc*
+
+  按键 / 命令             功能说明 ~
+  ----------------------------------------------------------------------------
+  `s` + 两个字符          向后跳到该两字符组合出现的位置
+  `S` + 两个字符          向前跳
+  `;` / `,`               跳到下一个 / 上一个匹配
+  `<leader>w`             保存当前文件 (`:w`)
+  `<leader>q`             退出当前窗口 (`:q`)
+  `<leader>co` / `cc`     打开 / 关闭 quickfix 窗口
+  `:LspStatus`            查看所有 LSP server 运行状态
+  `:LspStopServer <名>`   停止指定 server（如 `:LspStopServer gopls`）
+  `:Keys` / `:MyHelp`     打开本速查帮助（等同 `:help myvim`）
+  `:Readme`               在只读分屏中打开完整 `README.md` 文档
+
+==============================================================================
+6. Herdr 终端增强（Open in Vim / Search in Vim / 顶部路径）      *myvim-herdr*
+
+  Herdr 右键菜单与全局快捷键已配置为：
+  ```
+  Copy                    ctrl-shift-c
+  Paste                   ctrl-shift-v
+  Open in Vim             alt-v
+  Search in Vim           alt-f
+  ```
+
+  6.1 Open in Vim（打开选中文件名） ~
+  - 操作：在 Claude Code、Antigravity、Codex 等任意智能体窗口中用鼠标选中代码
+    文件名（若智能体接管了鼠标则按住 `Shift` 拖选），按 **`Alt + V`**（或
+    `Ctrl + Shift + G`），或右键点击 **`Open in Vim`**。
+  - 复用逻辑：优先复用当前 Tab 已有的 Vim 分屏 -> 其次复用同 Space 其他 Tab
+    中的 Vim 窗口 -> 其次复用空闲 Shell -> 否则在右侧新建 Vim 分屏。
+  - 支持格式：相对/绝对路径、`:行号:列号`、`#L行号`、`第 N 行`、仅文件名或
+    不带后缀的类名（如 `ExchangeController:300`）、跨行折行路径。
+
+  6.2 Search in Vim（选中文字在当前目录下全文搜索） ~
+  - 操作：在任意终端窗口中选中任意文字，按 **`Alt + F`** 或右键点击
+    **`Search in Vim`**。
+  - 效果：自动复用/打开 Vim 窗口，切换到当前终端所在工作目录，并弹出 FZF +
+    Ripgrep 全文搜索窗口（左侧文件行列表 + 右侧实时高亮代码预览），按 `Enter`
+    即可打开对应文件并跳到该行。
+
+  6.3 Vim 窗口上方显示当前文件完整绝对路径 ~
+  - `~/.vimrc` 开启 `set title` 并通过 `vim_title_fullpath` 自动将终端标题设为
+    `expand('%:p')`。
+  - `~/.config/herdr-app/mods/my-pane/main.js` 检测到 Vim 面板时，在上方状态栏
+    实时显示完整文件路径（替代默认的项目目录）。
+
+==============================================================================
+7. 维护、插件与排错指南                                         *myvim-maint*
+
+  【Vim 插件管理】 >
+    :PlugStatus                   " 查看插件状态
+    :PlugInstall                  " 安装 .vimrc 中新增的插件
+    :PlugUpdate                   " 更新所有插件
+    :PlugClean                    " 删除已移除的插件
+<
+  【更新本帮助文档索引】
+  如果手动修改了 `~/.vim/doc/myvim.txt`，在 Vim 中执行： >
+    :helptags ~/.vim/doc
+<
+  【Herdr 配置验证与日志排查】 >
+    herdr-app check ~/.config/herdr-app/mods/my-menu
+    herdr-app check ~/.config/herdr-app/mods/my-pane
+    herdr-app status
+    tail -f /tmp/open_vim.log
+<
+ vim:tw=78:ts=8:noet:ft=help:norl:
