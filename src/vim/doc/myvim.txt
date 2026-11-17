@@ -54,6 +54,17 @@
   <Space>ft / <Space>fT      当前文件 / 全项目 ctags 符号搜索
   <Space>fw                  当前窗口列表
 
+  【AI Agent 代码分析与追问 (agy / claude / codex / Herdr 窗口)】
+  <Space>aa                  用默认 AI (agy) 分析方法（若已有本地记录则弹窗选历史/重诊）
+  <Space>ai                  弹窗选择 AI 分析方法（若已有本地记录则弹窗选历史/重诊）
+  <Space>ah / :AIHistory     浏览并预览当前项目 (.vim-ai/) 所有已保存的诊断历史
+  1 ~ 9 (AI Tab 内)          一键选中模型返回的第 N 个快捷选项并发送追问
+  o (AI Tab 内)              弹出 FZF 选项菜单（支持 Tab 多选合并发送）
+  Enter (AI Tab 内)          在选项行按回车直接追问；在 file:line 行直接跳源码
+  a / <Space>ar (AI Tab 内)  自由输入追问内容（自动延续会话并同步追加到本地历史）
+  R (AI Tab 内)              对当前方法发起重新诊断
+  q (AI Tab 内)              关闭当前 AI 分析 Tab
+
   【侧边栏 / 快速跳转 / 常用操作】
   F9                         打开/关闭左侧 fern 文件树（以工作目录为根）
   <Space>e                   打开左侧文件树并定位到当前文件所在位置

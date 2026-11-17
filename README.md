@@ -205,6 +205,11 @@ ripgrep 默认遵守 `.gitignore`，`node_modules`、`vendor`、`target` 等被�
 
 | 按键 / 命令 | 功能 |
 |---|---|
+| `<leader>aa` | **用默认 AI Agent (`agy`) 分析当前方法或选中代码块**（自动保存至项目隐藏目录 `.vim-ai/`，再次触发同一方法时可零算力查看历史或选择重新诊断） |
+| `<leader>ai` | **弹窗选择 AI Agent（`agy` / `claude` / `codex` 或当前已打开的 Herdr Agent 窗口）** 分析方法（同样支持历史记录复用与重新诊断） |
+| `<leader>ah` 或 `:AIHistory` | **浏览当前项目 `.vim-ai/` 下所有已保存的方法诊断历史**（FZF 右侧实时预览 Markdown，回车打开） |
+| `1`~`9` / `o` / `Enter`（AI Tab 内） | **交互选择模型返回的选项**：按数字键 `1`~`9` 一键追问，按 `o` 弹窗单选/多选（`Tab`），在选项或 `file:line` 行按 `Enter` 直接追问或跳转源码 |
+| `a` / `<leader>ar` / `R`（AI Tab 内） | `a` 自由追问（自动延续会话并追加保存到本地记录）；`R` 强制重新诊断 |
 | `<leader>w` | 保存 |
 | `<leader>q` | 退出 |
 | `<leader>co` / `<leader>cc` | 打开 / 关闭 quickfix |

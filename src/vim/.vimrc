@@ -562,6 +562,17 @@ augroup vim_help_q_close
   autocmd FileType help nnoremap <buffer> <silent> q :close<CR>
 augroup END
 
+" ============================================================
+"  AI Agent 代码分析与追问 (agy / claude / codex / Herdr 窗口)
+" ============================================================
+let g:herdr_ai_default_agent = 'agy'
+nnoremap <silent> <leader>ai :call herdr_ai#ask('n', 1)<CR>
+xnoremap <silent> <leader>ai :<C-u>call herdr_ai#ask('v', 1)<CR>
+nnoremap <silent> <leader>aa :call herdr_ai#ask('n', 0)<CR>
+xnoremap <silent> <leader>aa :<C-u>call herdr_ai#ask('v', 0)<CR>
+nnoremap <silent> <leader>ah :call herdr_ai#browse_history()<CR>
+command! AIHistory call herdr_ai#browse_history()
+
 " 终端里用鼠标滚动
 set ttymouse=sgr
 
