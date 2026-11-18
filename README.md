@@ -366,7 +366,7 @@ ln -sf ~/.fzf/bin/fzf ~/.local/bin/fzf
 
 ## 九、重建 / 迁移到新机器（仓库 `src/` 一键替换）
 
-本仓库 `src/` 目录下已完整备份了所有 Vim 与 Herdr 的改动文件，目录结构如下：
+本仓库 `src/` 目录下已完整备份了所有 Vim 与 Herdr（同时支持 `herdr` 终端版与 `herdr-app` 桌面版）的改动文件，目录结构如下：
 
 ```
 src/
@@ -379,14 +379,19 @@ src/
 │   └── eclipse-jdt-ls/
 │       ├── eclipse-jdt-ls                      # -> ~/.local/share/vim-lsp-settings/servers/eclipse-jdt-ls/
 │       └── .vim-lsp-settings-version
-└── herdr-app/
+├── herdr/                                      # Herdr (TUI 终端工作区) 配置与插件
+│   ├── config.toml                             # -> ~/.config/herdr/config.toml (Alt+V / Alt+F + 顶部边框路径)
+│   └── plugins/
+│       └── vim-open/
+│           └── herdr-plugin.toml               # -> ~/.config/herdr/plugins/vim-open/herdr-plugin.toml
+└── herdr-app/                                  # Herdr-App (桌面版) 快捷键、布局与组件
     ├── keys.json                               # -> ~/.config/herdr-app/keys.json
     ├── layouts/
     │   └── main-copy.json                      # -> ~/.config/herdr-app/layouts/main-copy.json
     └── mods/
         ├── my-menu/                            # -> ~/.config/herdr-app/mods/my-menu/ (Open/Search in Vim)
         │   ├── main.js
-        │   ├── open_vim.py
+        │   ├── open_vim.py                     # 同时供 herdr 与 herdr-app 调用
         │   ├── mod.json
         │   ├── jsconfig.json
         │   ├── copy.svg
@@ -413,7 +418,8 @@ bash src/install.sh
 
 该脚本会自动完成：
 1. 复制 `src/vim/.vimrc` 到 `~/.vimrc`，复制 `src/vim/doc/myvim.txt` 到 `~/.vim/doc/`，复制 `README.md` 到 `~/.vim/README.md`，自动下载 `vim-plug`（若缺失）并生成 `:helptags ~/.vim/doc`。
-2. 复制 `src/herdr-app/` 下的 `keys.json`、`layouts/main-copy.json`、`mods/my-menu/`、`mods/my-pane/` 到 `~/.config/herdr-app/`，自动执行 `herdr-app check` 并切换到 `main-copy` 布局。
+2. 复制 `src/herdr/` 下的 `config.toml` 与 `plugins/vim-open/` 到 `~/.config/herdr/`，自动执行 `herdr plugin link`、`herdr plugin enable vim-open` 与 `herdr server reload-config`。
+3. 复制 `src/herdr-app/` 下的 `keys.json`、`layouts/main-copy.json`、`mods/my-menu/`、`mods/my-pane/` 到 `~/.config/herdr-app/`，自动执行 `herdr-app check` 并切换到 `main-copy` 布局。
 
 ### 9.2 首次装机外部工具与 LSP 安装步骤
 
@@ -474,9 +480,11 @@ bash src/install.sh
 
 ---
 
-## 十一、Herdr 终端增强（复制 / 粘贴 / Open in Vim / 顶部完整文件路径）
+## 十一、Herdr / Herdr-App 终端增强（复制 / 粘贴 / Open in Vim / 顶部完整文件路径）
 
-Herdr 默认的终端右键菜单只有分屏、缩放、关闭等，没有复制/粘贴和用 Vim 打开代码文件；且面板上方默认只显示项目目录。已在个人副本中补齐以下增强功能：
+本配置**同时支持 `herdr`（TUI 终端版，`~/.config/herdr`）与 `herdr-app`（GUI 桌面版，`~/.config/herdr-app`）**。
+
+在 `herdr-app` 中，终端右键菜单与快捷键如下（在 `herdr` TUI 中由于右键菜单项为二进制内置固定项，直接通过相同的快捷键 `Alt+V` / `Ctrl+Shift+G` / `Alt+F` 触发）：
 
 ```
 Copy                    ctrl-shift-c
@@ -492,9 +500,9 @@ Send right-clicks to pane
 Close pane              ctrl-shift-x
 ```
 
-- 这是 **Herdr 的终端菜单**，不是 Vim 的右键（Vim 右键仍为禁用状态，见 4.7）。
-- vim、tmux、部分 TUI 智能体等程序自己接管鼠标时，用 **Shift + 左键拖选** 并用 **Shift + 右键** 打开此菜单。
-- 快捷键：
+- 这是 **Herdr 的终端菜单/全局快捷键**，不是 Vim 的右键（Vim 右键仍为禁用状态，见 4.7）。
+- vim、tmux、部分 TUI 智能体等程序自己接管鼠标时，用 **Shift + 左键拖选**（在 `herdr` TUI 中默认 `copy_on_select = true`，拖选松开即自动复制）。
+- 快捷键（`herdr` 与 `herdr-app` 完全一致）：
   - **`Alt + V`**（备选 `Ctrl + Shift + G`）：**Open in Vim**（直接用 Vim 打开选中的代码文件与行号）
   - **`Alt + F`**：**Search in Vim**（将选中的文字在当前目录下进行 Ripgrep + FZF 全文搜索并实时预览代码）
 
@@ -523,16 +531,19 @@ Close pane              ctrl-shift-x
 
 ### 11.2 Vim 窗口顶部栏显示当前文件完整路径
 
-Herdr 默认面板顶部栏（`pane` mod）固定显示终端当前工作目录（`p.cwd`，即项目路径）。通过以下两步改为在 Vim 窗口上方实时显示**当前打开文件的完整绝对路径**：
+Herdr 默认面板顶部只显示目录或编号。通过以下配置在 Vim 窗口上方实时显示**当前打开文件的完整绝对路径**：
 
-1. **`~/.vimrc` 同步终端标题**：
-   开启 `set title`，并通过 `vim_title_fullpath` 自动命令组监听 `VimEnter,BufEnter,BufWinEnter,BufFilePost,DirChanged`，在普通代码窗口中（自动跳过 `fern`、`tagbar`、`qf` 等侧边栏）将 `&titlestring` 设为 `expand('%:p')`。
-2. **`my-pane` 自定义面板顶部栏**：
+1. **`~/.vimrc` 同步终端标题与 Herdr 面板标签**：
+   - 开启 `set title`，并通过 `vim_title_fullpath` 自动命令组监听 `VimEnter,BufEnter,BufWinEnter,BufFilePost,DirChanged`，在普通代码窗口中（自动跳过 `fern`、`tagbar`、`qf` 等侧边栏）将 `&titlestring` 设为 `expand('%:p')`。
+   - 当运行在 `herdr` (TUI) 中（存在 `$HERDR_PANE_ID` 环境变量）时，自动异步执行 `herdr pane rename $HERDR_PANE_ID "Vim · <完整文件路径>"`，并在退出 Vim（`VimLeavePre`）时自动执行 `herdr pane rename $HERDR_PANE_ID --clear` 恢复面板默认标题。
+2. **`herdr` (TUI) 顶部边框栏**：
+   在 `~/.config/herdr/config.toml` 的 `[ui]` 下启用 `pane_borders = "always"`，使单面板与多面板顶部边框始终显示 `Vim · /完整/文件/路径`。
+3. **`herdr-app` 自定义面板顶部栏 (`my-pane`)**：
    在 `~/.config/herdr-app/mods/my-pane/main.js` 中检测当 `p.program.key` 为 `vim`/`nvim` 且终端标题 `p.title` 为文件路径时，顶部栏左侧显示 `Vim`，右侧展示完整文件路径（替代默认的 `folder(p.cwd)`）。
 
-### 11.3 为什么用副本
+### 11.3 为什么 `herdr-app` 用副本
 
-Herdr 自带的 `menu`、`pane` mod 和 `main` 布局都是只读的：直接改会在下次启动时被还原（改动会被挪到 `*-edited`）。所以按官方推荐先克隆再改：
+`herdr-app` 自带的 `menu`、`pane` mod 和 `main` 布局都是只读的：直接改会在下次启动时被还原（改动会被挪到 `*-edited`）。所以按官方推荐先克隆再改：
 
 ```bash
 herdr-app do mod.clone '{"name":"menu","as":"my-menu"}'
@@ -544,21 +555,26 @@ herdr-app do layout.clone '{"name":"main","as":"main-copy"}'
 
 | 文件 | 改动 |
 |---|---|
-| `~/.config/herdr-app/keys.json` | 在 `global` 和 `terminal` 下绑定 `"alt-v": "my-pane.open_vim"` 与 `"ctrl-shift-g": "my-pane.open_vim"` |
-| `~/.config/herdr-app/mods/my-menu/main.js` | pane 右键菜单增加 `Copy` / `Paste` / `Open in Vim`（显示快捷键 `alt-v`）；点击后先聚焦目标 pane 并执行 `terminal.copy`，再异步读取剪贴板调用 `open_vim.py` |
-| `~/.config/herdr-app/mods/my-menu/open_vim.py` | 解析剪贴板与终端屏幕中的文件路径/行号，在当前 Tab 或同 Space 的 Vim 标签页中打开文件（支持 Ex 模式 `:edit` 复用已有 Vim 并刷新终端标题） |
+| `~/.config/herdr/config.toml` | 配置 `pane_borders = "always"`，并通过 `[[keys.command]]` 绑定 `alt+v` / `ctrl+shift+g` -> `vim-open.open`、`alt+f` -> `vim-open.search` |
+| `~/.config/herdr/plugins/vim-open/herdr-plugin.toml` | 注册 `herdr` 本地插件 `vim-open`（提供 `open`、`search` 动作以及 `file://` 链接处理器） |
+| `~/.config/herdr/plugins/vim-open/open_vim.py` | 通过 Unix Socket RPC（`HERDR_SOCKET_PATH`）直接与 `herdr` 通信，实现选中文本/剪贴板/屏幕回退解析及同 Tab / 跨 Tab Vim 复用与分屏 |
+| `~/.config/herdr-app/keys.json` | 在 `global` 和 `terminal` 下绑定 `"alt-v": "my-pane.open_vim"`、`"ctrl-shift-g": "my-pane.open_vim"` 与 `"alt-f": "my-pane.search_vim"` |
+| `~/.config/herdr-app/mods/my-menu/main.js` | pane 右键菜单增加 `Copy` / `Paste` / `Open in Vim` / `Search in Vim`；点击后先聚焦目标 pane 并执行 `terminal.copy`，再异步读取剪贴板调用 `open_vim.py` |
+| `~/.config/herdr-app/mods/my-menu/open_vim.py` | 同时支持 `herdr` (`--herdr open/search`) 与 `herdr-app` 的文件解析、行号定位、全文搜索与 Vim 面板复用 |
 | `~/.config/herdr-app/mods/my-menu/mod.json` | 调整菜单 overlay 高度至 `295` 以容纳新增菜单项 |
 | `~/.config/herdr-app/mods/my-menu/copy.svg`、`clipboard.svg`、`vim.svg` | 菜单图标 |
-| `~/.config/herdr-app/mods/my-pane/main.js` | ① 自定义面板顶部状态栏：Vim 窗口上方显示当前打开文件的完整绝对路径；② 通过 `nextCommand()` 响应 `my-pane.open_vim` 快捷键，对当前聚焦面板执行复制并调用 `open_vim.py` |
+| `~/.config/herdr-app/mods/my-pane/main.js` | ① 自定义面板顶部状态栏：Vim 窗口上方显示当前打开文件的完整绝对路径；② 通过 `nextCommand()` 响应 `my-pane.open_vim` 与 `my-pane.search_vim` 快捷键 |
 | `~/.config/herdr-app/layouts/main-copy.json` | 根节点加入 `"terminal_menu": "my-menu"`，并将 pane 顶部栏 mod 改为 `"mod": "my-pane"` |
-| `~/.vimrc` | 开启 `set title` 并通过 `vim_title_fullpath` 自动命令将终端标题实时更新为当前文件的完整路径（`expand('%:p')`） |
+| `~/.vimrc` | 开启 `set title` 并通过 `vim_title_fullpath` 自动命令实时更新终端标题与 `herdr` 面板标题为当前文件的完整路径（`expand('%:p')`） |
 
 ### 11.5 验证与日志排查
 
 ```bash
+herdr plugin list                                  # 确认 vim-open 插件已启用
+herdr plugin action list                           # 查看 vim-open.open / vim-open.search
+herdr server reload-config                         # 热重载 ~/.config/herdr/config.toml
 herdr-app check ~/.config/herdr-app/mods/my-menu   # check passed
 herdr-app check ~/.config/herdr-app/mods/my-pane   # check passed
-herdr-app status                                   # errors 为空
 tail -f /tmp/open_vim.log                          # 查看 Open in Vim 解析与跳转日志
 ```
 

@@ -1,0 +1,30 @@
+onboarding = false
+
+[ui]
+status_indicators = "dots"
+pane_borders = "always"
+
+[ui.toast]
+delivery = "off"
+
+[theme]
+name = "one-light"
+auto_switch = false
+
+[[keys.command]]
+key = "alt+v"
+type = "plugin_action"
+command = "vim-open.open"
+description = "Open in Vim"
+
+[[keys.command]]
+key = "ctrl+shift+g"
+type = "plugin_action"
+command = "vim-open.open"
+description = "Open in Vim"
+
+[[keys.command]]
+key = "alt+f"
+type = "plugin_action"
+command = "vim-open.search"
+description = "Search in Vim"

@@ -576,19 +576,31 @@ command! AIHistory call herdr_ai#browse_history()
 " 终端里用鼠标滚动
 set ttymouse=sgr
 
-" 终端标题栏显示当前打开文件的完整绝对路径（供 Herdr 面板顶部显示）
+" 终端标题栏显示当前打开文件的完整绝对路径（供 Herdr / herdr-app 面板顶部显示）
 set title
 function! s:update_vim_title() abort
   if &buftype ==# '' && &filetype !~# '^\(fern\|tagbar\|qf\)$'
     let l:full = expand('%:p')
     if !empty(l:full)
       let &titlestring = l:full
+      if exists('$HERDR_PANE_ID') && !empty($HERDR_PANE_ID) && l:full !=# get(g:, '_herdr_last_title', '')
+        let g:_herdr_last_title = l:full
+        if exists('*job_start')
+          call job_start(['herdr', 'pane', 'rename', $HERDR_PANE_ID, 'Vim · ' . l:full], {'stoponexit': ''})
+        endif
+      endif
     endif
+  endif
+endfunction
+function! s:clear_herdr_vim_title() abort
+  if exists('$HERDR_PANE_ID') && !empty($HERDR_PANE_ID) && exists('*job_start')
+    call job_start(['herdr', 'pane', 'rename', $HERDR_PANE_ID, '--clear'], {'stoponexit': ''})
   endif
 endfunction
 augroup vim_title_fullpath
   autocmd!
   autocmd VimEnter,BufEnter,BufWinEnter,BufFilePost,DirChanged * call s:update_vim_title()
+  autocmd VimLeavePre * call s:clear_herdr_vim_title()
 augroup END
 
 " 禁用鼠标右键：默认在 Normal/Insert 模式下右键会开始/扩展 Visual 选区

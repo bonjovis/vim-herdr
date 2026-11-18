@@ -200,7 +200,10 @@
 
   6.3 Vim 窗口上方显示当前文件完整绝对路径 ~
   - `~/.vimrc` 开启 `set title` 并通过 `vim_title_fullpath` 自动将终端标题设为
-    `expand('%:p')`。
+    `expand('%:p')`，在 `herdr` (TUI) 中还会自动调用 `herdr pane rename` 将面板
+    顶部边框标题更新为 `Vim · <完整文件路径>`（退出 Vim 时自动清除）。
+  - `~/.config/herdr/config.toml` 配置 `pane_borders = "always"` 并绑定 `alt+v`、
+    `ctrl+shift+g`、`alt+f` 到 `vim-open` 插件动作。
   - `~/.config/herdr-app/mods/my-pane/main.js` 检测到 Vim 面板时，在上方状态栏
     实时显示完整文件路径（替代默认的项目目录）。
 
@@ -217,10 +220,12 @@
   如果手动修改了 `~/.vim/doc/myvim.txt`，在 Vim 中执行： >
     :helptags ~/.vim/doc
 <
-  【Herdr 配置验证与日志排查】 >
+  【Herdr / Herdr-App 配置验证与日志排查】 >
+    herdr plugin list
+    herdr plugin action list
+    herdr server reload-config
     herdr-app check ~/.config/herdr-app/mods/my-menu
     herdr-app check ~/.config/herdr-app/mods/my-pane
-    herdr-app status
     tail -f /tmp/open_vim.log
 <
  vim:tw=78:ts=8:noet:ft=help:norl:
