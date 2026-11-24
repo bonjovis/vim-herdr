@@ -218,12 +218,15 @@ ripgrep 默认遵守 `.gitignore`，`node_modules`、`vendor`、`target` 等被�
 | `:LspStatus` | 查看所有 LSP server 状态 |
 | `:LspStopServer <名字>` | 停止指定 server（如 `:LspStopServer gopls`） |
 
-### 4.7 鼠标
+### 4.7 鼠标与终端右键菜单
 
-- `set mouse=a`：左键定位、拖动选中、滚轮滚动均正常。
-- **鼠标右键已禁用**（默认行为会开始/扩展 Visual 选区，插入模式下也会临时进入 Visual）。
-  如想恢复，删除 `~/.vimrc` 末尾的 `<RightMouse>` / `<RightDrag>` / `<RightRelease>` 映射即可。
-- 终端 Herdr 自己的右键菜单（已加入复制/粘贴）不是 Vim 的右键，见第十一节。
+- `set mouse=a` + `set mousemodel=popup_setpos`：左键定位、拖动选中、滚轮滚动均正常。
+- **内置右键浮动菜单（普通终端 / SSH / `herdr` TUI 通用）**：
+  - **Normal 模式右键**：将光标定位到点击位置并弹出菜单（复制当前词、复制当前行、粘贴、转到定义 `gd`、查找引用 `gr`、查找接口实现 `gi`、全文搜索当前词、AI 分析方法、复制文件路径与行号）。
+  - **Visual 选中模式右键**：在屏幕任意位置右键均保留当前选区并弹出菜单（复制选中、剪切选中、粘贴替换、全文搜索选中、AI 分析选中代码）。
+  - **Insert 模式右键**：弹出粘贴、复制当前词、复制当前行菜单。
+- **系统剪贴板自动打通**：右键复制及普通 `y` 操作会同时通过 **OSC 52**（穿透 SSH / tmux 直接写入宿主机剪贴板）与本地 `wl-copy` / `xclip` / `pbcopy` 同步。
+- 如需呼出系统终端原生右键菜单，按住 **`Shift + 右键`**；在 `herdr-app` 中默认右键直接展示 Herdr 增强菜单（见第十一节）。
 
 ---
 
@@ -325,9 +328,9 @@ JDTLS 需要导入整个 Maven/Gradle 工程并解析依赖，属正常现象。
 
 intelephense 首次索引未完成。观察状态栏提示，等索引结束后再查；`vendor` 目录也会被索引，项目越大耗时越长。
 
-**5. 右键没反应**
+**5. 想呼出系统终端自带的右键菜单（而非 Vim 内置浮动菜单）**
 
-是刻意禁用的，见 4.7 节。
+按住 **`Shift + 右键`** 即可绕过 Vim 鼠标捕获，弹出系统终端原生菜单（见 4.7 节）。
 
 **6. 在 Vim 里执行 `:!mvn` / `:!java` 用的是 JDK 21**
 
@@ -500,7 +503,7 @@ Send right-clicks to pane
 Close pane              ctrl-shift-x
 ```
 
-- 这是 **Herdr 的终端菜单/全局快捷键**，不是 Vim 的右键（Vim 右键仍为禁用状态，见 4.7）。
+- 这是 **`herdr-app` 的终端菜单 / 全局快捷键**（在普通终端中直接打开 Vim 时，右键会弹出 Vim 内置浮动菜单，见 4.7）。
 - vim、tmux、部分 TUI 智能体等程序自己接管鼠标时，用 **Shift + 左键拖选**（在 `herdr` TUI 中默认 `copy_on_select = true`，拖选松开即自动复制）。
 - 快捷键（`herdr` 与 `herdr-app` 完全一致）：
   - **`Alt + V`**（备选 `Ctrl + Shift + G`）：**Open in Vim**（直接用 Vim 打开选中的代码文件与行号）

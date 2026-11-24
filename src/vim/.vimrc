@@ -603,13 +603,212 @@ augroup vim_title_fullpath
   autocmd VimLeavePre * call s:clear_herdr_vim_title()
 augroup END
 
-" 禁用鼠标右键：默认在 Normal/Insert 模式下右键会开始/扩展 Visual 选区
-nnoremap <RightMouse>   <Nop>
-nnoremap <RightDrag>    <Nop>
-nnoremap <RightRelease> <Nop>
-vnoremap <RightMouse>   <Nop>
-vnoremap <RightDrag>    <Nop>
-vnoremap <RightRelease> <Nop>
-noremap! <RightMouse>   <Nop>
-noremap! <RightDrag>    <Nop>
-noremap! <RightRelease> <Nop>
+" ============================================================
+"  终端右键浮动菜单 & 系统剪贴板同步（支持本地 Wayland/X11/macOS 与 SSH OSC52）
+" ============================================================
+function! s:sys_copy(text) abort
+  if empty(a:text)
+    return
+  endif
+  if has('clipboard')
+    silent! call setreg('+', a:text)
+    silent! call setreg('*', a:text)
+  endif
+  " 1) OSC 52：本地终端与 SSH 远程终端均可直接写入宿主机系统剪贴板
+  if exists('*echoraw') && strlen(a:text) <= 100000 && executable('base64')
+    let l:b64 = substitute(system('base64', a:text), '[\r\n]\+', '', 'g')
+    if v:shell_error == 0 && !empty(l:b64)
+      let l:osc = "\x1b]52;c;" . l:b64 . "\x07"
+      if !empty($TMUX)
+        let l:osc = "\x1bPtmux;\x1b" . l:osc . "\x1b\\"
+      endif
+      call echoraw(l:osc)
+    endif
+  endif
+  " 2) 本地桌面剪贴板工具同步（异步管道发送，避免 wl-copy / xclip 阻塞 Vim）
+  let l:cmd = []
+  if !empty($WAYLAND_DISPLAY) && executable('wl-copy')
+    let l:cmd = ['wl-copy']
+  elseif !empty($DISPLAY) && executable('xclip')
+    let l:cmd = ['xclip', '-selection', 'clipboard', '-in']
+  elseif !empty($DISPLAY) && executable('xsel')
+    let l:cmd = ['xsel', '--clipboard', '--input']
+  elseif executable('pbcopy')
+    let l:cmd = ['pbcopy']
+  endif
+  if !empty(l:cmd) && exists('*job_start')
+    let l:job = job_start(l:cmd, {'in_io': 'pipe', 'out_io': 'null', 'err_io': 'null', 'stoponexit': ''})
+    if job_status(l:job) ==# 'run'
+      let l:ch = job_getchannel(l:job)
+      call ch_sendraw(l:ch, a:text)
+      call ch_close_in(l:ch)
+    endif
+  endif
+endfunction
+
+function! s:sys_read_clipboard() abort
+  if has('clipboard') && !empty(@+)
+    return [@+, getregtype('+')]
+  endif
+  let l:out = ''
+  if !empty($WAYLAND_DISPLAY) && executable('wl-paste')
+    let l:out = system('wl-paste --no-newline 2>/dev/null')
+    if v:shell_error == 0 && !empty(l:out)
+      return [substitute(l:out, "\r\n", "\n", 'g'), 'v']
+    endif
+  elseif !empty($DISPLAY) && executable('xclip')
+    let l:out = system('xclip -selection clipboard -o 2>/dev/null')
+    if v:shell_error == 0 && !empty(l:out)
+      return [substitute(l:out, "\r\n", "\n", 'g'), 'v']
+    endif
+  elseif !empty($DISPLAY) && executable('xsel')
+    let l:out = system('xsel --clipboard --output 2>/dev/null')
+    if v:shell_error == 0 && !empty(l:out)
+      return [substitute(l:out, "\r\n", "\n", 'g'), 'v']
+    endif
+  elseif executable('pbpaste')
+    let l:out = system('pbpaste 2>/dev/null')
+    if v:shell_error == 0 && !empty(l:out)
+      return [substitute(l:out, "\r\n", "\n", 'g'), 'v']
+    endif
+  endif
+  return [getreg('"'), getregtype('"')]
+endfunction
+
+function! s:ctx_copy_visual() abort
+  let l:save_reg = getreg('z')
+  let l:save_type = getregtype('z')
+  try
+    silent normal! gv"zy
+    let l:text = getreg('z')
+    let l:rtype = getregtype('z')
+  finally
+    call setreg('z', l:save_reg, l:save_type)
+  endtry
+  call s:sys_copy(l:text)
+  call setreg('"', l:text, l:rtype)
+  echo '已复制选中内容 (' . strchars(l:text) . ' 字符)'
+endfunction
+
+function! s:ctx_cut_visual() abort
+  if !&modifiable || &readonly
+    call s:ctx_copy_visual()
+    return
+  endif
+  let l:save_reg = getreg('z')
+  let l:save_type = getregtype('z')
+  try
+    silent normal! gv"zd
+    let l:text = getreg('z')
+    let l:rtype = getregtype('z')
+  finally
+    call setreg('z', l:save_reg, l:save_type)
+  endtry
+  call s:sys_copy(l:text)
+  call setreg('"', l:text, l:rtype)
+  echo '已剪切选中内容 (' . strchars(l:text) . ' 字符)'
+endfunction
+
+function! s:ctx_paste(mode) abort
+  if !&modifiable || &readonly
+    echohl WarningMsg | echo '当前窗口为只读，无法粘贴' | echohl None
+    return
+  endif
+  let [l:text, l:rtype] = s:sys_read_clipboard()
+  if empty(l:text)
+    echohl WarningMsg | echo '剪贴板为空（远程终端粘贴外部内容可直接按 Ctrl+Shift+V / Cmd+V）' | echohl None
+    return
+  endif
+  let l:save_reg = getreg('z')
+  let l:save_type = getregtype('z')
+  try
+    call setreg('z', l:text, l:rtype)
+    if a:mode ==# 'v'
+      silent normal! gv"zp
+    elseif a:mode ==# 'i'
+      silent normal! "zgp
+    else
+      silent normal! "zp
+    endif
+  finally
+    call setreg('z', l:save_reg, l:save_type)
+  endtry
+endfunction
+
+function! s:ctx_copy_word() abort
+  let l:word = expand('<cword>')
+  if empty(l:word)
+    call s:ctx_copy_line()
+    return
+  endif
+  call s:sys_copy(l:word)
+  call setreg('"', l:word, 'v')
+  echo '已复制: ' . l:word
+endfunction
+
+function! s:ctx_copy_line() abort
+  let l:line = getline('.')
+  call s:sys_copy(l:line)
+  call setreg('"', l:line . "\n", 'V')
+  echo '已复制当前行 (第 ' . line('.') . ' 行)'
+endfunction
+
+function! s:ctx_copy_path() abort
+  let l:path = expand('%:p')
+  let l:target = empty(l:path) ? getcwd() : (l:path . ':' . line('.'))
+  call s:sys_copy(l:target)
+  call setreg('"', l:target, 'v')
+  echo '已复制路径: ' . l:target
+endfunction
+
+function! s:ctx_goto_def() abort
+  if !empty(maparg('gd', 'n'))
+    execute "normal gd"
+  else
+    silent! execute "normal! \<C-]>"
+  endif
+endfunction
+
+function! s:ctx_rg_cword() abort
+  call HerdrSearchInDir(s:current_search_root(), expand('<cword>'))
+endfunction
+
+" 普通 y 复制时自动同步到系统剪贴板（不影响 d/c/x 删除操作）
+augroup vim_yank_sysclip
+  autocmd!
+  autocmd TextYankPost * if v:event.operator ==# 'y' && (empty(v:event.regname) || v:event.regname =~# '^[+*]$') | call s:sys_copy(join(v:event.regcontents, "\n")) | endif
+augroup END
+
+" 右键弹出浮动菜单（定位光标到点击处；Visual 模式下任意位置右键均保留当前选区）
+set mousemodel=popup_setpos
+if has('menu')
+  silent! aunmenu PopUp
+
+  vnoremenu <silent> 10.10  PopUp.复制选中内容\ \ (Copy)      :<C-u>call <SID>ctx_copy_visual()<CR>
+  vnoremenu <silent> 10.20  PopUp.剪切选中内容\ \ (Cut)       :<C-u>call <SID>ctx_cut_visual()<CR>
+  vnoremenu <silent> 10.30  PopUp.粘贴替换选中\ \ (Paste)     :<C-u>call <SID>ctx_paste('v')<CR>
+  vnoremenu          10.40  PopUp.-sep1-                     :
+  vnoremenu <silent> 10.50  PopUp.全文搜索选中\ \ (Space+fg)  :<C-u>call <SID>rg_visual()<CR>
+  vnoremenu <silent> 10.60  PopUp.AI\ 分析选中\ \ \ (Space+aa) :<C-u>call herdr_ai#ask('v', 0)<CR>
+  vnoremenu <silent> 10.70  PopUp.AI\ 选模型分析\ (Space+ai)  :<C-u>call herdr_ai#ask('v', 1)<CR>
+
+  nnoremenu <silent> 10.10  PopUp.复制当前词\ \ \ \ (yiw)       :call <SID>ctx_copy_word()<CR>
+  nnoremenu <silent> 10.20  PopUp.复制当前行\ \ \ \ (yy)        :call <SID>ctx_copy_line()<CR>
+  nnoremenu <silent> 10.30  PopUp.粘贴\ \ \ \ \ \ \ \ \ \ (Paste)     :call <SID>ctx_paste('n')<CR>
+  nnoremenu          10.40  PopUp.-sep1-                       :
+  nnoremenu <silent> 10.50  PopUp.转到定义\ \ \ \ \ \ (gd)       :call <SID>ctx_goto_def()<CR>
+  nnoremenu <silent> 10.60  PopUp.查找所有引用\ \ (gr)          :call <SID>lsp_fzf_location('references', 'References (调用路径)')<CR>
+  nnoremenu <silent> 10.70  PopUp.查找接口实现\ \ (gi)          :call <SID>lsp_fzf_location('implementation', 'Implementations (具体实现)')<CR>
+  nnoremenu <silent> 10.80  PopUp.全文搜索当前词\ (Space+fg)    :call <SID>ctx_rg_cword()<CR>
+  nnoremenu          10.90  PopUp.-sep2-                       :
+  nnoremenu <silent> 10.100 PopUp.AI\ 分析方法\ \ \ (Space+aa)   :call herdr_ai#ask('n', 0)<CR>
+  nnoremenu <silent> 10.110 PopUp.复制路径与行号\ (Path)        :call <SID>ctx_copy_path()<CR>
+
+  inoremenu <silent> 10.10  PopUp.粘贴\ \ \ \ \ \ \ \ (Paste)     <C-o>:call <SID>ctx_paste('i')<CR>
+  inoremenu <silent> 10.20  PopUp.复制当前词\ \ (Copy\ Word)  <C-o>:call <SID>ctx_copy_word()<CR>
+  inoremenu <silent> 10.30  PopUp.复制当前行\ \ (Copy\ Line)  <C-o>:call <SID>ctx_copy_line()<CR>
+
+  xnoremap <silent> <RightMouse> <Cmd>popup! PopUp<CR>
+endif
+noremap  <RightDrag> <Nop>
+noremap! <RightDrag> <Nop>

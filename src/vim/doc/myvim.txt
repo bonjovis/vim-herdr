@@ -24,7 +24,8 @@
   Alt + F                    在当前目录下全文搜索选中的文字 (Search in Vim)
   Ctrl + Shift + C / V       终端复制 / 粘贴
   Shift + 鼠标左键拖选       在接管鼠标的程序（Vim/Claude等）中选中文本
-  Shift + 鼠标右键           打开 Herdr 右键菜单
+  鼠标右键（普通终端内）     弹出 Vim 内置浮动菜单（复制/粘贴/跳转/搜索/AI分析）
+  Shift + 鼠标右键           绕过 Vim 弹出系统终端原生菜单（herdr-app 直接右键即可）
 
   【LSP 代码导航與调用链】
   gd                         跳转到定义 (Definition)
