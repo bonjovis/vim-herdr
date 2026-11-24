@@ -606,6 +606,21 @@ augroup END
 " ============================================================
 "  终端右键浮动菜单 & 系统剪贴板同步（支持本地 Wayland/X11/macOS 与 SSH OSC52）
 " ============================================================
+function! s:sys_copy_osc52_finish(state) abort
+  if a:state.done
+    return
+  endif
+  let a:state.done = 1
+  let l:b64 = substitute(join(a:state.chunks, ''), '[\r\n]\+', '', 'g')
+  if !empty(l:b64)
+    let l:osc = "\x1b]52;c;" . l:b64 . "\x07"
+    if !empty($TMUX)
+      let l:osc = "\x1bPtmux;\x1b" . l:osc . "\x1b\\"
+    endif
+    call echoraw(l:osc)
+  endif
+endfunction
+
 function! s:sys_copy(text) abort
   if empty(a:text)
     return
@@ -615,14 +630,31 @@ function! s:sys_copy(text) abort
     silent! call setreg('*', a:text)
   endif
   " 1) OSC 52：本地终端与 SSH 远程终端均可直接写入宿主机系统剪贴板
+  "    优先使用 job_start() 异步编码，避免 system() 触发终端模式重置
   if exists('*echoraw') && strlen(a:text) <= 100000 && executable('base64')
-    let l:b64 = substitute(system('base64', a:text), '[\r\n]\+', '', 'g')
-    if v:shell_error == 0 && !empty(l:b64)
-      let l:osc = "\x1b]52;c;" . l:b64 . "\x07"
-      if !empty($TMUX)
-        let l:osc = "\x1bPtmux;\x1b" . l:osc . "\x1b\\"
+    if exists('*job_start')
+      let l:b64_state = {'chunks': [], 'done': 0}
+      let l:b64_job = job_start(['base64'], {
+        \ 'in_io': 'pipe',
+        \ 'err_io': 'null',
+        \ 'out_mode': 'raw',
+        \ 'out_cb': {ch, msg -> add(l:b64_state.chunks, msg)},
+        \ 'close_cb': {ch -> s:sys_copy_osc52_finish(l:b64_state)},
+        \ })
+      if job_status(l:b64_job) ==# 'run'
+        let l:b64_ch = job_getchannel(l:b64_job)
+        call ch_sendraw(l:b64_ch, a:text)
+        call ch_close_in(l:b64_ch)
       endif
-      call echoraw(l:osc)
+    else
+      let l:b64 = substitute(system('base64', a:text), '[\r\n]\+', '', 'g')
+      if v:shell_error == 0 && !empty(l:b64)
+        let l:osc = "\x1b]52;c;" . l:b64 . "\x07"
+        if !empty($TMUX)
+          let l:osc = "\x1bPtmux;\x1b" . l:osc . "\x1b\\"
+        endif
+        call echoraw(l:osc)
+      endif
     endif
   endif
   " 2) 本地桌面剪贴板工具同步（异步管道发送，避免 wl-copy / xclip 阻塞 Vim）
@@ -679,7 +711,11 @@ function! s:ctx_copy_visual() abort
   let l:save_reg = getreg('z')
   let l:save_type = getregtype('z')
   try
-    silent normal! gv"zy
+    if mode() =~# "[vV\<C-v>]"
+      silent normal! "zy
+    else
+      silent normal! gv"zy
+    endif
     let l:text = getreg('z')
     let l:rtype = getregtype('z')
   finally
@@ -698,7 +734,11 @@ function! s:ctx_cut_visual() abort
   let l:save_reg = getreg('z')
   let l:save_type = getregtype('z')
   try
-    silent normal! gv"zd
+    if mode() =~# "[vV\<C-v>]"
+      silent normal! "zd
+    else
+      silent normal! gv"zd
+    endif
     let l:text = getreg('z')
     let l:rtype = getregtype('z')
   finally
@@ -709,30 +749,111 @@ function! s:ctx_cut_visual() abort
   echo '已剪切选中内容 (' . strchars(l:text) . ' 字符)'
 endfunction
 
-function! s:ctx_paste(mode) abort
+function! s:sys_read_clipboard_finish(state, cb) abort
+  if a:state.done
+    return
+  endif
+  let a:state.done = 1
+  let l:out = substitute(join(a:state.chunks, ''), "\r\n", "\n", 'g')
+  if !empty(l:out)
+    call a:cb(l:out, 'v')
+  else
+    call a:cb(getreg('"'), getregtype('"'))
+  endif
+endfunction
+
+function! s:sys_read_clipboard_async(cb) abort
+  if has('clipboard') && !empty(@+)
+    call a:cb(@+, getregtype('+'))
+    return
+  endif
+  let l:cmd = []
+  if !empty($WAYLAND_DISPLAY) && executable('wl-paste')
+    let l:cmd = ['wl-paste', '--no-newline']
+  elseif !empty($DISPLAY) && executable('xclip')
+    let l:cmd = ['xclip', '-selection', 'clipboard', '-o']
+  elseif !empty($DISPLAY) && executable('xsel')
+    let l:cmd = ['xsel', '--clipboard', '--output']
+  elseif executable('pbpaste')
+    let l:cmd = ['pbpaste']
+  endif
+  if !empty(l:cmd) && exists('*job_start')
+    let l:state = {'chunks': [], 'done': 0}
+    let l:job = job_start(l:cmd, {
+      \ 'in_io': 'null',
+      \ 'err_io': 'null',
+      \ 'out_mode': 'raw',
+      \ 'out_cb': {ch, msg -> add(l:state.chunks, msg)},
+      \ 'close_cb': {ch -> s:sys_read_clipboard_finish(l:state, a:cb)},
+      \ })
+    if job_status(l:job) !=# 'fail'
+      return
+    endif
+  endif
+  let [l:text, l:rtype] = s:sys_read_clipboard()
+  call a:cb(l:text, l:rtype)
+endfunction
+
+function! s:ctx_insert_at(lnum, col, text) abort
+  let l:cur = getline(a:lnum)
+  let l:before = a:col > 1 ? l:cur[:a:col - 2] : ''
+  let l:after = l:cur[a:col - 1:]
+  let l:parts = split(a:text, "\n", 1)
+  if len(l:parts) == 1
+    call setline(a:lnum, l:before . l:parts[0] . l:after)
+    call cursor(a:lnum, strlen(l:before . l:parts[0]) + 1)
+  else
+    call setline(a:lnum, l:before . l:parts[0])
+    call append(a:lnum, l:parts[1:-2] + [l:parts[-1] . l:after])
+    call cursor(a:lnum + len(l:parts) - 1, strlen(l:parts[-1]) + 1)
+  endif
+endfunction
+
+function! s:ctx_paste_apply(mode, text, rtype) abort
   if !&modifiable || &readonly
     echohl WarningMsg | echo '当前窗口为只读，无法粘贴' | echohl None
     return
   endif
-  let [l:text, l:rtype] = s:sys_read_clipboard()
-  if empty(l:text)
+  if empty(a:text)
     echohl WarningMsg | echo '剪贴板为空（远程终端粘贴外部内容可直接按 Ctrl+Shift+V / Cmd+V）' | echohl None
+    return
+  endif
+  if a:mode ==# 'i'
+    call s:ctx_insert_at(line('.'), col('.'), a:text)
+    return
+  endif
+  if a:mode ==# 'v' && mode() ==# 'v'
+    let l:p1 = getpos('v')
+    let l:p2 = getpos('.')
+    if l:p1[1] < l:p2[1] || (l:p1[1] == l:p2[1] && l:p1[2] <= l:p2[2])
+      let [l:sl, l:sc] = [l:p1[1], l:p1[2]]
+    else
+      let [l:sl, l:sc] = [l:p2[1], l:p2[2]]
+    endif
+    silent normal! "_d
+    call s:ctx_insert_at(l:sl, l:sc, a:text)
     return
   endif
   let l:save_reg = getreg('z')
   let l:save_type = getregtype('z')
   try
-    call setreg('z', l:text, l:rtype)
+    call setreg('z', a:text, a:rtype)
     if a:mode ==# 'v'
       silent normal! gv"zp
-    elseif a:mode ==# 'i'
-      silent normal! "zgp
     else
       silent normal! "zp
     endif
   finally
     call setreg('z', l:save_reg, l:save_type)
   endtry
+endfunction
+
+function! s:ctx_paste(mode) abort
+  if !&modifiable || &readonly
+    echohl WarningMsg | echo '当前窗口为只读，无法粘贴' | echohl None
+    return
+  endif
+  call s:sys_read_clipboard_async({text, rtype -> s:ctx_paste_apply(a:mode, text, rtype)})
 endfunction
 
 function! s:ctx_copy_word() abort
@@ -809,6 +930,112 @@ if has('menu')
   inoremenu <silent> 10.30  PopUp.复制当前行\ \ (Copy\ Line)  <C-o>:call <SID>ctx_copy_line()<CR>
 
   xnoremap <silent> <RightMouse> <Cmd>popup! PopUp<CR>
+endif
+
+" 终端 Vim 9.1 中，Insert 及 -- (insert) VISUAL -- 模式下点击 :popup PopUp 菜单项会以
+" Normal 模式执行 :emenu，导致 E335: Menu not defined for Normal mode。此处统一改用原生
+" popup_menu() 响应 Insert 与 Visual（含 Insert-Visual）右键菜单，支持鼠标点击与键盘选择。
+if !has('gui_running') && exists('*popup_menu')
+  function! s:ctx_popup_filter(winid, key) abort
+    if a:key ==# "\<LeftMouse>"
+      let l:pos = getmousepos()
+      let l:p = popup_getpos(a:winid)
+      let l:row = l:pos.screenrow - l:p.core_line + 1
+      if l:pos.screencol >= l:p.col && l:pos.screencol < l:p.col + l:p.width
+            \ && l:row >= 1 && l:row <= l:p.core_height
+        call popup_close(a:winid, l:row)
+      else
+        call popup_close(a:winid, -1)
+      endif
+      return 1
+    elseif a:key ==# "\<RightMouse>"
+      call popup_close(a:winid, -1)
+      return 1
+    endif
+    return popup_filter_menu(a:winid, a:key)
+  endfunction
+
+  function! s:ctx_popup_opts(cb) abort
+    let l:pos = getmousepos()
+    let l:opts = {
+      \ 'pos': 'topleft',
+      \ 'callback': a:cb,
+      \ 'filter': function('s:ctx_popup_filter'),
+      \ 'border': [],
+      \ 'padding': [0, 1, 0, 1],
+      \ 'highlight': 'Pmenu',
+      \ 'moved': 'any',
+      \ }
+    if get(l:pos, 'screenrow', 0) > 0
+      let l:opts['line'] = l:pos.screenrow
+      let l:opts['col'] = l:pos.screencol
+    else
+      let l:opts['line'] = 'cursor+1'
+      let l:opts['col'] = 'cursor'
+    endif
+    return l:opts
+  endfunction
+
+  function! s:ctx_insert_popup_cb(id, result) abort
+    if a:result == 1
+      call s:ctx_paste('i')
+    elseif a:result == 2
+      call s:ctx_copy_word()
+    elseif a:result == 3
+      call s:ctx_copy_line()
+    endif
+  endfunction
+
+  function! s:ctx_insert_popup() abort
+    call popup_menu([
+      \ '粘贴        (Paste)',
+      \ '复制当前词  (Copy Word)',
+      \ '复制当前行  (Copy Line)',
+      \ ], s:ctx_popup_opts(function('s:ctx_insert_popup_cb')))
+  endfunction
+
+  function! s:ctx_visual_popup_cb(id, result) abort
+    if a:result <= 0 || a:result == 4
+      return
+    endif
+    if a:result == 1
+      call s:ctx_copy_visual()
+    elseif a:result == 2
+      call s:ctx_cut_visual()
+    elseif a:result == 3
+      call s:ctx_paste('v')
+    elseif a:result == 5
+      if mode() =~# "[vV\<C-v>]"
+        silent execute "normal! \<Esc>"
+      endif
+      call s:rg_visual()
+    elseif a:result == 6
+      if mode() =~# "[vV\<C-v>]"
+        silent execute "normal! \<Esc>"
+      endif
+      call herdr_ai#ask('v', 0)
+    elseif a:result == 7
+      if mode() =~# "[vV\<C-v>]"
+        silent execute "normal! \<Esc>"
+      endif
+      call herdr_ai#ask('v', 1)
+    endif
+  endfunction
+
+  function! s:ctx_visual_popup() abort
+    call popup_menu([
+      \ '复制选中内容  (Copy)',
+      \ '剪切选中内容  (Cut)',
+      \ '粘贴替换选中  (Paste)',
+      \ '──────────────────────────',
+      \ '全文搜索选中  (Space+fg)',
+      \ 'AI 分析选中   (Space+aa)',
+      \ 'AI 选模型分析 (Space+ai)',
+      \ ], s:ctx_popup_opts(function('s:ctx_visual_popup_cb')))
+  endfunction
+
+  inoremap <silent> <RightMouse> <Cmd>call <SID>ctx_insert_popup()<CR>
+  vnoremap <silent> <RightMouse> <Cmd>call <SID>ctx_visual_popup()<CR>
 endif
 noremap  <RightDrag> <Nop>
 noremap! <RightDrag> <Nop>
