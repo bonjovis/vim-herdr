@@ -6,26 +6,25 @@ let s:script_path = expand('~/.vim/scripts/ask_ai.py')
 let s:tab_seq = 0
 
 function! s:project_root(path) abort
-  let l:dir = isdirectory(a:path) ? a:path : fnamemodify(a:path, ':h')
+  let l:dir = isdirectory(a:path) ? fnamemodify(a:path, ':p:h') : fnamemodify(a:path, ':p:h')
   if empty(l:dir)
     let l:dir = getcwd()
   endif
-  for l:marker in ['go.mod', 'pom.xml', 'build.gradle', 'build.gradle.kts', 'package.json', 'composer.json']
-    let l:found = findfile(l:marker, l:dir . ';')
-    if !empty(l:found)
-      return fnamemodify(l:found, ':h')
+  let l:home = fnamemodify(expand('~'), ':p:h')
+  let l:markers = ['.git', 'go.mod', 'pom.xml', 'build.gradle', 'build.gradle.kts', 'package.json', 'composer.json', '.hg', '.svn']
+  let l:cur = l:dir
+  while !empty(l:cur) && l:cur !=# '/' && l:cur !=# l:home
+    for l:m in l:markers
+      if isdirectory(l:cur . '/' . l:m) || filereadable(l:cur . '/' . l:m)
+        return l:cur
+      endif
+    endfor
+    let l:parent = fnamemodify(l:cur, ':h')
+    if l:parent ==# l:cur
+      break
     endif
-  endfor
-  for l:marker in ['.git', '.hg', '.svn']
-    let l:found = finddir(l:marker, l:dir . ';')
-    if !empty(l:found)
-      return fnamemodify(l:found, ':h')
-    endif
-    let l:found = findfile(l:marker, l:dir . ';')
-    if !empty(l:found)
-      return fnamemodify(l:found, ':h')
-    endif
-  endfor
+    let l:cur = l:parent
+  endwhile
   return l:dir
 endfunction
 
@@ -102,6 +101,28 @@ function! s:replace_marker(bufnr, marker, new_lines) abort
   endif
 endfunction
 
+function! s:merge_code_refs(old_refs, new_refs) abort
+  let l:merged = []
+  let l:seen = {}
+  for l:ref in (type(a:old_refs) == type([]) ? a:old_refs : []) + (type(a:new_refs) == type([]) ? a:new_refs : [])
+    if type(l:ref) != type({}) || empty(get(l:ref, 'file', ''))
+      continue
+    endif
+    let l:lnum = max([1, str2nr(get(l:ref, 'line', 1))])
+    let l:key = l:ref.file . ':' . l:lnum
+    if has_key(l:seen, l:key)
+      continue
+    endif
+    let l:seen[l:key] = 1
+    call add(l:merged, {
+      \ 'file': l:ref.file,
+      \ 'line': l:lnum,
+      \ 'desc': get(l:ref, 'desc', ''),
+      \ })
+  endfor
+  return l:merged
+endfunction
+
 function! s:finish_job(ctx) abort
   if !a:ctx.closed || !a:ctx.exited || a:ctx.done
     return
@@ -130,7 +151,20 @@ function! s:finish_job(ctx) abort
     if type(l:options) != type([])
       let l:options = []
     endif
+    let l:code_refs = get(l:res, 'code_refs', [])
+    if type(l:code_refs) != type([])
+      let l:code_refs = []
+    endif
     let l:lines = split(l:answer, "\n", 1)
+    if !empty(l:code_refs)
+      call add(l:lines, '')
+      call add(l:lines, printf('> 📂 **涉及的代码位置（共 %d 处）**（按 `f` 弹出 FZF 预览并跳转，或光标移到任意代码行按 `Enter` 打开）：', len(l:code_refs)))
+      for l:idx in range(len(l:code_refs))
+        let l:ref = l:code_refs[l:idx]
+        let l:desc = empty(get(l:ref, 'desc', '')) ? '' : (' — ' . l:ref.desc)
+        call add(l:lines, printf('> `[C%d]` `%s:%d`%s', l:idx + 1, l:ref.file, get(l:ref, 'line', 1), l:desc))
+      endfor
+    endif
     if !empty(l:options)
       call add(l:lines, '')
       call add(l:lines, '> 💡 **快捷选项**（按数字键 `1`~`' . len(l:options) . '` 直接追问，按 `o` 弹窗单选/多选，或光标移到选项行按 `Enter`）：')
@@ -139,6 +173,7 @@ function! s:finish_job(ctx) abort
       endfor
     endif
     call s:replace_marker(l:bufnr, a:ctx.marker, l:lines)
+    let l:total_refs = len(l:code_refs)
     if bufexists(l:bufnr)
       let l:state = getbufvar(l:bufnr, 'herdr_ai_state', {})
       if type(l:state) == type({})
@@ -148,15 +183,18 @@ function! s:finish_job(ctx) abort
           let l:state.record_id = l:rec_id
         endif
         let l:state.options = l:options
+        let l:state.code_refs = s:merge_code_refs(get(l:state, 'code_refs', []), l:code_refs)
+        let l:total_refs = len(l:state.code_refs)
         let l:state.busy = 0
         call setbufvar(l:bufnr, 'herdr_ai_state', l:state)
       endif
     endif
     redraw
+    let l:ref_hint = l:total_refs > 0 ? printf('按 f 选代码(%d处)，', l:total_refs) : ''
     if !empty(l:options)
-      echomsg printf('✅ AI (%s) 分析完成（已存至 .vim-ai）：按 1~%d 或 o 选快捷项，a 追问，R 重诊，q 关闭', a:ctx.agent, len(l:options))
+      echomsg printf('✅ AI (%s) 分析完成（已存至 .vim-ai）：%s按 1~%d 或 o 选快捷项，a 追问，R 重诊，q 关闭', a:ctx.agent, l:ref_hint, len(l:options))
     else
-      echomsg printf('✅ AI (%s) 分析完成（已存至 .vim-ai）：按 a 追问，R 重诊，q 关闭 Tab', a:ctx.agent)
+      echomsg printf('✅ AI (%s) 分析完成（已存至 .vim-ai）：%s按 a 追问，R 重诊，q 关闭 Tab', a:ctx.agent, l:ref_hint)
     endif
   else
     let l:err = type(l:res) == type({}) && has_key(l:res, 'error')
@@ -219,6 +257,8 @@ function! s:launch_job(bufnr, req, marker) abort
 endfunction
 
 function! s:bind_ai_tab_keys() abort
+  nnoremap <buffer> <silent> f :call herdr_ai#pick_code_refs()<CR>
+  nnoremap <buffer> <silent> <leader>af :call herdr_ai#pick_code_refs()<CR>
   nnoremap <buffer> <silent> a :call herdr_ai#followup()<CR>
   nnoremap <buffer> <silent> <leader>ar :call herdr_ai#followup()<CR>
   nnoremap <buffer> <silent> o :call herdr_ai#pick_options()<CR>
@@ -233,8 +273,15 @@ endfunction
 function! s:open_ai_tab(ctx, agent) abort
   let g:herdr_ai_last_agent = a:agent
   let s:tab_seq += 1
-  let l:title = empty(a:ctx.symbol) ? 'AI' : a:ctx.symbol
+  let l:kind = get(a:ctx, 'kind', 'symbol')
+  let l:question = get(a:ctx, 'question', '')
+  let l:title = l:kind ==# 'qa'
+        \ ? (empty(l:question) ? 'QA' : strcharpart(l:question, 0, 28))
+        \ : (empty(a:ctx.symbol) ? 'AI' : a:ctx.symbol)
   let l:safe_title = substitute(l:title, '[^A-Za-z0-9_.-]', '_', 'g')
+  if empty(substitute(l:safe_title, '_', '', 'g'))
+    let l:safe_title = l:kind ==# 'qa' ? 'QA' : 'AI'
+  endif
   tabnew
   setlocal buftype=nofile bufhidden=wipe noswapfile
   setlocal filetype=markdown wrap linebreak conceallevel=0
@@ -245,20 +292,36 @@ function! s:open_ai_tab(ctx, agent) abort
 
   let l:bufnr = bufnr('%')
   let l:marker = '<!-- HERDR_AI_LOADING_' . s:tab_seq . '_0 -->'
-  let l:header = [
-    \ '# AI 代码分析：`' . l:title . '`',
-    \ '- **Agent**: `' . a:agent . '`  |  **位置**: `' . a:ctx.file . ':' . a:ctx.line . '`',
-    \ '- **快捷键**: `1`~`9` 直选快捷项  |  `o` 弹窗单选/多选  |  `a`/`<Space>ar` 自由追问  |  `R` 重新诊断  |  `Enter`/`gf` 跳转文件或选项  |  `q` 关闭 Tab',
-    \ '',
-    \ '---',
-    \ '',
-    \ '### 1. 作用 / 用法 / 项目角色 / 调用层级分析',
-    \ '',
-    \ l:marker,
-    \ ]
+  if l:kind ==# 'qa'
+    let l:header = [
+      \ '# AI 项目问答：' . l:question,
+      \ '- **Agent**: `' . a:agent . '`  |  **项目**: `' . a:ctx.cwd . '`',
+      \ '- **快捷键**: `f` 选择并跳转代码位置  |  `1`~`9` 直选快捷项  |  `o` 弹窗单选/多选  |  `a`/`<Space>ar` 自由追问  |  `R` 重新提问  |  `Enter`/`gf` 跳转文件或选项  |  `q` 关闭 Tab',
+      \ '',
+      \ '---',
+      \ '',
+      \ '### 总结与涉及代码',
+      \ '',
+      \ l:marker,
+      \ ]
+  else
+    let l:header = [
+      \ '# AI 代码分析：`' . l:title . '`',
+      \ '- **Agent**: `' . a:agent . '`  |  **位置**: `' . a:ctx.file . ':' . a:ctx.line . '`',
+      \ '- **快捷键**: `f` 选择并跳转代码位置  |  `1`~`9` 直选快捷项  |  `o` 弹窗单选/多选  |  `a`/`<Space>ar` 自由追问  |  `R` 重新诊断  |  `Enter`/`gf` 跳转文件或选项  |  `q` 关闭 Tab',
+      \ '',
+      \ '---',
+      \ '',
+      \ '### 1. 作用 / 用法 / 项目角色 / 调用层级分析',
+      \ '',
+      \ l:marker,
+      \ ]
+  endif
   call setline(1, l:header)
 
   let b:herdr_ai_state = {
+    \ 'kind': l:kind,
+    \ 'question': l:question,
     \ 'agent': a:agent,
     \ 'session_id': '',
     \ 'record_id': '',
@@ -268,6 +331,7 @@ function! s:open_ai_tab(ctx, agent) abort
     \ 'symbol': a:ctx.symbol,
     \ 'code': get(a:ctx, 'code', ''),
     \ 'options': [],
+    \ 'code_refs': [],
     \ 'turn': 0,
     \ 'busy': 1,
     \ }
@@ -275,7 +339,9 @@ function! s:open_ai_tab(ctx, agent) abort
   call s:bind_ai_tab_keys()
 
   " 替换占位符显示加载提示，保留精确 marker 用于回调匹配
-  let l:loading_text = printf('> 🤖 正在向 [%s] 询问 `%s`，请稍候（可先切回代码 Tab）...', a:agent, l:title)
+  let l:loading_text = l:kind ==# 'qa'
+        \ ? printf('> 🤖 正在向 [%s] 检索项目并回答 "%s"，请稍候（可先切回代码 Tab）...', a:agent, l:title)
+        \ : printf('> 🤖 正在向 [%s] 询问 `%s`，请稍候（可先切回代码 Tab）...', a:agent, l:title)
   call setbufline(l:bufnr, len(l:header), l:loading_text)
 
   let l:req = extend(copy(a:ctx), { 'agent': a:agent })
@@ -286,6 +352,9 @@ function! s:open_history_record(rec, ctx) abort
   let s:tab_seq += 1
   let l:title = empty(get(a:rec, 'symbol', '')) ? 'AI' : a:rec.symbol
   let l:safe_title = substitute(l:title, '[^A-Za-z0-9_.-]', '_', 'g')
+  if empty(substitute(l:safe_title, '_', '', 'g'))
+    let l:safe_title = 'AI'
+  endif
   tabnew
   setlocal buftype=nofile bufhidden=wipe noswapfile
   setlocal filetype=markdown wrap linebreak conceallevel=0
@@ -299,6 +368,8 @@ function! s:open_history_record(rec, ctx) abort
   call setline(1, l:lines)
 
   let b:herdr_ai_state = {
+    \ 'kind': get(a:rec, 'kind', 'symbol'),
+    \ 'question': get(a:rec, 'question', ''),
     \ 'agent': get(a:rec, 'agent', 'agy'),
     \ 'session_id': get(a:rec, 'session_id', ''),
     \ 'record_id': get(a:rec, 'id', ''),
@@ -308,13 +379,15 @@ function! s:open_history_record(rec, ctx) abort
     \ 'symbol': l:title,
     \ 'code': get(a:ctx, 'code', ''),
     \ 'options': get(a:rec, 'options', []),
+    \ 'code_refs': get(a:rec, 'code_refs', []),
     \ 'turn': get(a:rec, 'turns', 0),
     \ 'busy': 0,
     \ }
 
   call s:bind_ai_tab_keys()
   redraw
-  echomsg printf('📂 已打开本地历史诊断 [%s | %s]（零算力消耗）：按 1~9/o/a 可继续追问，按 R 重新诊断，q 关闭', get(a:rec, 'agent', ''), get(a:rec, 'updated_at', ''))
+  let l:ref_hint = !empty(b:herdr_ai_state.code_refs) ? printf('按 f 选代码(%d处)，', len(b:herdr_ai_state.code_refs)) : ''
+  echomsg printf('📂 已打开本地历史诊断 [%s | %s]（零算力消耗）：%s按 1~9/o/a 可继续追问，按 R 重新诊断，q 关闭', get(a:rec, 'agent', ''), get(a:rec, 'updated_at', ''), l:ref_hint)
 endfunction
 
 function! herdr_ai#rediagnose() abort
@@ -323,13 +396,15 @@ function! herdr_ai#rediagnose() abort
   endif
   let l:st = b:herdr_ai_state
   let l:ctx = {
+    \ 'kind': get(l:st, 'kind', 'symbol'),
+    \ 'question': get(l:st, 'question', ''),
     \ 'cwd': l:st.cwd,
     \ 'file': l:st.file,
     \ 'line': l:st.line,
     \ 'symbol': l:st.symbol,
     \ 'code': get(l:st, 'code', ''),
     \ }
-  if empty(l:ctx.code) && filereadable(l:st.cwd . '/' . l:st.file)
+  if l:ctx.kind !=# 'qa' && empty(l:ctx.code) && filereadable(l:st.cwd . '/' . l:st.file)
     let l:flines = readfile(l:st.cwd . '/' . l:st.file)
     let l:s = max([0, l:st.line - 9])
     let l:e = min([len(l:flines) - 1, l:st.line + 44])
@@ -469,31 +544,127 @@ function! herdr_ai#pick_options() abort
   call fzf#run(fzf#wrap('herdr_ai_opts', l:spec, 0))
 endfunction
 
+function! s:open_code_ref(cwd, file, lnum) abort
+  let l:target = filereadable(a:file) ? a:file : (a:cwd . '/' . a:file)
+  if !filereadable(l:target)
+    echohl WarningMsg | echom '文件不存在: ' . l:target | echohl None
+    return
+  endif
+  execute 'botright split' fnameescape(l:target)
+  call cursor(max([1, str2nr(a:lnum)]), 1)
+  normal! zvzz
+endfunction
+
+function! s:code_ref_sink(cwd, line) abort
+  let l:parts = split(a:line, "\t")
+  if empty(l:parts)
+    return
+  endif
+  let l:m = matchlist(l:parts[0], '^\(.\+\):\(\d\+\)$')
+  if empty(l:m)
+    return
+  endif
+  call s:open_code_ref(a:cwd, l:m[1], str2nr(l:m[2]))
+endfunction
+
+function! s:scan_buffer_code_refs(cwd) abort
+  let l:refs = []
+  let l:seen = {}
+  for l:line in getline(1, '$')
+    let l:fm = matchlist(l:line, '\([A-Za-z0-9_./-]\+\.[A-Za-z0-9_+-]\+\):\(\d\+\)')
+    if empty(l:fm)
+      continue
+    endif
+    let l:f = l:fm[1]
+    let l:lnum = max([1, str2nr(l:fm[2])])
+    let l:target = filereadable(l:f) ? l:f : (a:cwd . '/' . l:f)
+    if !filereadable(l:target)
+      continue
+    endif
+    let l:key = l:f . ':' . l:lnum
+    if has_key(l:seen, l:key)
+      continue
+    endif
+    let l:seen[l:key] = 1
+    let l:desc = trim(substitute(l:line, '^.*' . escape(l:fm[0], '/\.*[]^$~') . '`\?\s*[-—–:：|]*\s*', '', ''))
+    call add(l:refs, { 'file': l:f, 'line': l:lnum, 'desc': l:desc })
+  endfor
+  return l:refs
+endfunction
+
+function! herdr_ai#pick_code_refs() abort
+  if !exists('b:herdr_ai_state')
+    echohl WarningMsg | echom '当前窗口不是 AI 分析 Tab' | echohl None
+    return
+  endif
+  let l:cwd = get(b:herdr_ai_state, 'cwd', getcwd())
+  let l:refs = get(b:herdr_ai_state, 'code_refs', [])
+  if empty(l:refs)
+    let l:refs = s:scan_buffer_code_refs(l:cwd)
+  endif
+  if empty(l:refs)
+    echohl WarningMsg | echom '当前回答中暂未提取到可跳转的项目代码位置' | echohl None
+    return
+  endif
+
+  let l:source = []
+  for l:i in range(len(l:refs))
+    let l:ref = l:refs[l:i]
+    let l:file = l:ref.file
+    let l:lnum = max([1, str2nr(get(l:ref, 'line', 1))])
+    let l:full = filereadable(l:file) ? l:file : (l:cwd . '/' . l:file)
+    let l:desc = get(l:ref, 'desc', '')
+    let l:desc_str = empty(l:desc) ? '' : (' — ' . l:desc)
+    let l:disp = printf("\x1b[33m[C%d]\x1b[0m \x1b[36m%s\x1b[0m:\x1b[32m%d\x1b[0m%s", l:i + 1, l:file, l:lnum, l:desc_str)
+    call add(l:source, printf("%s:%d\t%d\t%s", l:full, l:lnum, l:lnum, l:disp))
+  endfor
+
+  let l:spec = fzf#vim#with_preview({
+    \ 'source': l:source,
+    \ 'sink': {line -> s:code_ref_sink(l:cwd, line)},
+    \ 'placeholder': '{1}',
+    \ 'options': [
+    \   '--ansi',
+    \   '-d', "\t",
+    \   '--with-nth', '3..',
+    \   '--tiebreak=index',
+    \   '--prompt', '涉及的代码位置 (Enter 打开跳转)> ',
+    \   '--preview-window', '+{2}-/2',
+    \ ],
+    \ })
+  call fzf#run(fzf#wrap('herdr_ai_refs', l:spec, 0))
+endfunction
+
 function! herdr_ai#enter_action() abort
   let l:line = getline('.')
+  " 0. 光标在涉及代码位置行: > `[C1]` `path/to/file:line` ...
+  let l:cm = matchlist(l:line, '^>\s*`\[C\d\+\]`\s*`\([^`]\+\):\(\d\+\)`')
+  if !empty(l:cm)
+    let l:cwd = exists('b:herdr_ai_state') ? get(b:herdr_ai_state, 'cwd', getcwd()) : getcwd()
+    call s:open_code_ref(l:cwd, l:cm[1], str2nr(l:cm[2]))
+    return
+  endif
   " 1. 光标在快捷选项行: > `[1]` ...
   let l:m = matchlist(l:line, '^>\s*`\[\(\d\+\)\]`\s*\(.\+\)$')
   if !empty(l:m)
     call s:send_followup_text(printf('我选择第 %s 项：%s', l:m[1], trim(l:m[2])))
     return
   endif
-  " 2. 光标在 Markdown 编号选项行: 1. ...
-  let l:m2 = matchlist(l:line, '^\s*\d\+[\.\)、]\s\+\(.\+\)$')
-  if !empty(l:m2) && l:m2[1] !~# '^\*\*\(具体作用\|使用方法\|在整个项目里的作用\|在项目中的作用\|调用的代码层级关系\)\*\*'
-    call s:send_followup_text(substitute(l:m2[1], '\*\*', '', 'g'))
-    return
-  endif
-  " 3. 光标在文件路径:行号上 -> 在前一个 Tab 或新分屏打开源码
-  let l:fm = matchlist(l:line, '\([A-Za-z0-9_./-]\+\.[A-Za-z0-9]\+\):\(\d\+\)')
+  " 2. 光标在文件路径:行号上 -> 在分屏打开源码
+  let l:fm = matchlist(l:line, '\([A-Za-z0-9_./-]\+\.[A-Za-z0-9_+-]\+\):\(\d\+\)')
   if !empty(l:fm)
     let l:cwd = exists('b:herdr_ai_state') ? get(b:herdr_ai_state, 'cwd', getcwd()) : getcwd()
     let l:target = filereadable(l:fm[1]) ? l:fm[1] : (l:cwd . '/' . l:fm[1])
     if filereadable(l:target)
-      execute 'botright split' fnameescape(l:target)
-      call cursor(str2nr(l:fm[2]), 1)
-      normal! zvzz
+      call s:open_code_ref(l:cwd, l:fm[1], str2nr(l:fm[2]))
       return
     endif
+  endif
+  " 3. 光标在 Markdown 编号选项行: 1. ...
+  let l:m2 = matchlist(l:line, '^\s*\d\+[\.\)、]\s\+\(.\+\)$')
+  if !empty(l:m2) && l:m2[1] !~# '^\*\*\(具体作用\|使用方法\|在整个项目里的作用\|在项目中的作用\|调用的代码层级关系\|核心总结\)\*\*'
+    call s:send_followup_text(substitute(l:m2[1], '\*\*', '', 'g'))
+    return
   endif
   " 4. 回退到 gf
   silent! normal! gf
@@ -508,12 +679,13 @@ function! s:pick_agent(ctx) abort
 
   if executable('python3') && filereadable(s:script_path)
     try
-      let l:raw = system(printf('python3 %s --list-windows', shellescape(s:script_path)))
+      let l:self_id = exists('$HC_TERMINAL_ID') ? $HC_TERMINAL_ID : ''
+      let l:raw = system(printf('python3 %s --list-windows %s %s', shellescape(s:script_path), shellescape(l:self_id), shellescape(a:ctx.cwd)))
       let l:wins = json_decode(l:raw)
       if type(l:wins) == type([])
         for l:w in l:wins
-          let l:mark = get(l:w, 'cwd', '') ==# a:ctx.cwd ? '★ 当前项目窗口: ' : 'Herdr 窗口: '
-          call add(l:items, printf("%s\t%s%s", l:w.id, l:mark, l:w.label))
+          let l:scope = get(l:w, 'scope', 'Herdr 窗口')
+          call add(l:items, printf("%s\t%s: %s", l:w.id, l:scope, l:w.label))
         endfor
       endif
     catch
@@ -615,6 +787,149 @@ function! herdr_ai#ask(mode, pick_agent) abort
   else
     call s:open_ai_tab(l:ctx, l:default_agent)
   endif
+endfunction
+
+function! herdr_ai#ask_question(mode, pick_agent, ...) abort
+  let l:default_agent = get(g:, 'herdr_ai_last_agent', get(g:, 'herdr_ai_default_agent', 'agy'))
+  let l:q = a:0 >= 1 ? trim(a:1) : ''
+  if empty(l:q)
+    let l:prompt = a:pick_agent ? '问 AI (稍后选模型)> ' : printf('问 AI (%s)> ', l:default_agent)
+    let l:q = trim(input(l:prompt))
+  endif
+  if empty(l:q)
+    return
+  endif
+
+  let l:ctx = s:extract_context(a:mode)
+  if a:mode !=# 'v'
+    let l:ctx.code = ''
+  endif
+  let l:ctx.kind = 'qa'
+  let l:ctx.question = l:q
+  let l:ctx.symbol = strcharpart(l:q, 0, 32)
+
+  if a:pick_agent
+    call s:pick_agent(l:ctx)
+  else
+    call s:open_ai_tab(l:ctx, l:default_agent)
+  endif
+endfunction
+
+function! s:do_send_ref_job(target_id, full_path, s_line, e_line, agent_cwd, agent_label) abort
+  let l:state = {'out': [], 'done': 0}
+  call job_start([
+        \ 'python3', s:script_path, '--send-ref',
+        \ a:target_id, a:full_path, string(a:s_line), string(a:e_line), a:agent_cwd
+        \ ], {
+        \ 'in_io': 'null',
+        \ 'err_io': 'null',
+        \ 'out_cb': {ch, msg -> add(l:state.out, msg)},
+        \ 'close_cb': {ch -> s:on_send_ref_done(l:state, a:agent_label)},
+        \ })
+endfunction
+
+function! s:on_send_ref_done(state, agent_label) abort
+  if a:state.done
+    return
+  endif
+  let a:state.done = 1
+  try
+    let l:res = json_decode(join(a:state.out, "\n"))
+    let l:ref = get(l:res, 'ref', '')
+    if get(l:res, 'pasted', v:false)
+      echomsg printf('🚀 已发送 %s 到 %s 输入框', l:ref, a:agent_label)
+    else
+      echomsg printf('📋 已复制 %s 到剪贴板（可直接在 Agent 窗口粘贴）', l:ref)
+    endif
+  catch
+  endtry
+endfunction
+
+function! s:on_list_agents_for_send(state, full_path, s_line, e_line, force_pick) abort
+  if a:state.done
+    return
+  endif
+  let a:state.done = 1
+  let l:wins = []
+  try
+    let l:wins = json_decode(join(a:state.out, "\n"))
+  catch
+  endtry
+  if type(l:wins) != type([]) || empty(l:wins)
+    let l:loc = a:e_line > a:s_line ? printf('@%s:%d-%d', a:full_path, a:s_line, a:e_line) : printf('@%s:%d', a:full_path, a:s_line)
+    call setreg('"', l:loc . ' ', 'v')
+    echohl WarningMsg | echom '未检测到运行中的 Herdr Agent 窗口，已复制位置: ' . l:loc | echohl None
+    return
+  endif
+
+  " 非强制选择时：若最高优先级（同分屏 Tab / 同工作区 / 同项目目录）恰好只有 1 个 Agent，直接发送
+  if !a:force_pick
+    let l:best_prio = get(l:wins[0], 'priority', 9)
+    if l:best_prio <= 3
+      let l:top_matches = filter(copy(l:wins), 'get(v:val, "priority", 9) == l:best_prio')
+      if len(l:top_matches) == 1
+        let l:w = l:top_matches[0]
+        call s:do_send_ref_job(l:w.id, a:full_path, a:s_line, a:e_line, get(l:w, 'cwd', ''), l:w.label)
+        return
+      endif
+    elseif len(l:wins) == 1
+      let l:w = l:wins[0]
+      call s:do_send_ref_job(l:w.id, a:full_path, a:s_line, a:e_line, get(l:w, 'cwd', ''), l:w.label)
+      return
+    endif
+  endif
+
+  let l:items = []
+  let l:win_map = {}
+  for l:w in l:wins
+    let l:win_map[l:w.id] = l:w
+    call add(l:items, printf("%s\t%s: %s", l:w.id, get(l:w, 'scope', 'Agent'), l:w.label))
+  endfor
+  let l:loc_tag = a:e_line > a:s_line ? printf('%s:%d-%d', fnamemodify(a:full_path, ':t'), a:s_line, a:e_line) : printf('%s:%d', fnamemodify(a:full_path, ':t'), a:s_line)
+  let l:spec = {
+    \ 'source': l:items,
+    \ 'sink': {line -> s:do_send_ref_job(split(line, "\t")[0], a:full_path, a:s_line, a:e_line, get(get(l:win_map, split(line, "\t")[0], {}), 'cwd', ''), get(get(l:win_map, split(line, "\t")[0], {}), 'label', 'Agent'))},
+    \ 'options': [
+    \   '--delimiter', "\t",
+    \   '--with-nth', '2..',
+    \   '--tiebreak=index',
+    \   '--prompt', printf('发送 @%s 到哪个 Agent 输入框> ', l:loc_tag),
+    \ ],
+    \ }
+  call fzf#run(fzf#wrap('herdr_send_ref', l:spec, 0))
+endfunction
+
+function! herdr_ai#send_to_agent(mode, force_pick) abort
+  let l:full_path = expand('%:p')
+  if empty(l:full_path) || &buftype !=# ''
+    echohl WarningMsg | echom '当前窗口不是普通代码文件，无法发送代码位置' | echohl None
+    return
+  endif
+  if a:mode ==# 'v'
+    if mode() =~# "[vV\<C-v>]"
+      let l:l1 = line('v')
+      let l:l2 = line('.')
+      silent execute "normal! \<Esc>"
+    else
+      let l:l1 = line("'<")
+      let l:l2 = line("'>")
+    endif
+    let l:s_line = min([l:l1, l:l2])
+    let l:e_line = max([l:l1, l:l2])
+  else
+    let l:s_line = line('.')
+    let l:e_line = l:s_line
+  endif
+
+  let l:cwd = s:resolve_current_cwd()
+  let l:self_id = exists('$HC_TERMINAL_ID') ? $HC_TERMINAL_ID : ''
+  let l:state = {'out': [], 'done': 0}
+  call job_start(['python3', s:script_path, '--list-windows', l:self_id, l:cwd], {
+    \ 'in_io': 'null',
+    \ 'err_io': 'null',
+    \ 'out_cb': {ch, msg -> add(l:state.out, msg)},
+    \ 'close_cb': {ch -> s:on_list_agents_for_send(l:state, l:full_path, l:s_line, l:e_line, a:force_pick)},
+    \ })
 endfunction
 
 function! herdr_ai#browse_history() abort

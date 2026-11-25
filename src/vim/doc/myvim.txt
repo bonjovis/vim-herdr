@@ -45,8 +45,9 @@
   <Space>lf                  格式化当前文件
   ]g / [g                    下一个 / 上一个错误或警告
 
-  【FZF 搜索（文件 / 全文 / Buffer / 符号）】
+  【FZF 搜索与项目切换（文件 / 项目 / 全文 / Buffer / 符号）】
   <Space>ff                  按文件名模糊搜索 (rg --files)
+  <Space>fp                  多项目一键切换（最近访问置顶 + 右侧 Git 状态预览 + 回车找文件）
   <Space>fg (Normal 模式)    全项目交互式全文搜索 (ripgrep + 右侧预览)
   <Space>fg (Visual 选中后)  直接用选中文字在当前项目根下全文搜索
   <Space>fb                  已打开的 Buffer 列表
@@ -55,15 +56,27 @@
   <Space>ft / <Space>fT      当前文件 / 全项目 ctags 符号搜索
   <Space>fw                  当前窗口列表
 
-  【AI Agent 代码分析与追问 (agy / claude / codex / Herdr 窗口)】
+  【Git 阅读与追溯 (vim-gitgutter + FZF 历史 + 浮窗 Blame)】
+  ]c / [c                    跳到下一处 / 上一处本地 Git 修改块 (Hunk)
+  <Space>hp                  浮窗预览当前修改块的 diff 内容
+  <Space>hu / <Space>hs      一键回滚当前修改块 / 暂存当前修改块 (Stage Hunk)
+  <Space>gc                  FZF 浏览当前文件历次 Git 提交（右侧实时预览每次 diff）
+  <Space>gb                  浮窗显示当前行的 Git Blame（作者、时间与完整提交说明）
+
+  【AI Agent 代码分析、追问与双向联动 (agy / claude / codex / Herdr 窗口)】
+  <Space>as (Normal/Visual)  将当前行或选中行 `@path:line` 送入旁边 Agent 输入框并聚焦
+  <Space>aS (Normal/Visual)  弹窗选择目标 Agent 窗口并送入 `@path:line`
   <Space>aa                  用默认 AI (agy) 分析方法（若已有本地记录则弹窗选历史/重诊）
   <Space>ai                  弹窗选择 AI 分析方法（若已有本地记录则弹窗选历史/重诊）
+  <Space>aq / :AIAsk [问题]  输入自由问题询问当前项目（总结后列出涉及代码，按 f 选代码跳转）
+  <Space>aQ                  输入自由问题并弹窗选择 AI Agent（agy/claude/codex/Herdr 窗口）
   <Space>ah / :AIHistory     浏览并预览当前项目 (.vim-ai/) 所有已保存的诊断历史
+  f / <Space>af (AI Tab 内)  弹出 FZF 列表预览并跳转到回答中涉及的代码文件与行号
   1 ~ 9 (AI Tab 内)          一键选中模型返回的第 N 个快捷选项并发送追问
   o (AI Tab 内)              弹出 FZF 选项菜单（支持 Tab 多选合并发送）
-  Enter (AI Tab 内)          在选项行按回车直接追问；在 file:line 行直接跳源码
+  Enter (AI Tab 内)          在代码行/file:line 直接跳源码；在选项行按回车直接追问
   a / <Space>ar (AI Tab 内)  自由输入追问内容（自动延续会话并同步追加到本地历史）
-  R (AI Tab 内)              对当前方法发起重新诊断
+  R (AI Tab 内)              对当前方法/问题发起重新诊断
   q (AI Tab 内)              关闭当前 AI 分析 Tab
 
   【侧边栏 / 快速跳转 / 常用操作】

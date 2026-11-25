@@ -28,7 +28,11 @@ if [[ ! -f "${HOME}/.vim/autoload/plug.vim" ]]; then
 fi
 
 if command -v vim >/dev/null 2>&1; then
-  vim -Nu "${HOME}/.vimrc" -es -c "silent! helptags ~/.vim/doc" -c "qall!" || true
+  if [[ ! -d "${HOME}/.vim/plugged/vim-gitgutter" ]] && command -v git >/dev/null 2>&1; then
+    echo "    正在安装新增插件 airblade/vim-gitgutter ..."
+    git clone --depth 1 https://github.com/airblade/vim-gitgutter.git "${HOME}/.vim/plugged/vim-gitgutter" || true
+  fi
+  vim -Nu "${HOME}/.vimrc" -es -c "silent! helptags ~/.vim/doc" -c "silent! helptags ~/.vim/plugged/vim-gitgutter/doc" -c "qall!" || true
 fi
 
 echo "==> [2/5] 同步 Java JDTLS 启动脚本（若已存在 jdtls 目录）..."

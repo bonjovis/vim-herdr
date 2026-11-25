@@ -17,7 +17,7 @@ filetype plugin indent on
 syntax enable
 
 set encoding=utf-8
-set number relativenumber
+set nonumber norelativenumber
 set hidden
 set mouse=a
 set updatetime=300
@@ -36,9 +36,35 @@ set path+=**
 " 补全菜单：不自动选中第一项
 set completeopt=menu,menuone,noinsert,noselect
 
-" 关闭备份/交换文件带来的噪音
+" 关闭备份/交换文件带来的噪音；开启跨会话持久化撤销（undofile）与外部修改静默热刷新（autoread）
 set nobackup nowritebackup
 set noswapfile
+set autoread
+
+let s:vim_undo_dir = expand('~/.cache/vim/undo')
+if !isdirectory(s:vim_undo_dir)
+  silent! call mkdir(s:vim_undo_dir, 'p', 0700)
+endif
+if isdirectory(s:vim_undo_dir) && has('persistent_undo')
+  let &undodir = s:vim_undo_dir
+  set undofile
+endif
+
+" 重新打开文件时自动回到上次退出的光标行（排除 git commit / rebase 临时文件）
+augroup vim_restore_cursor
+  autocmd!
+  autocmd BufReadPost * if &buftype ==# '' && &filetype !~# '^\(commit\|gitcommit\|gitrebase\)$'
+        \ && line("'\"") > 1 && line("'\"") <= line('$')
+        \ | execute "normal! g`\"" | endif
+augroup END
+
+" 外部智能体（Claude / Agy / Codex）修改文件后，切回 Vim 或停顿瞬间自动静默刷新（无未保存冲突时不弹 W11）
+augroup vim_auto_reload
+  autocmd!
+  autocmd FocusGained,BufEnter,CursorHold,CursorHoldI *
+        \ if mode() !~# '^[c!t]' && getcmdwintype() ==# '' && &buftype ==# '' | silent! checktime | endif
+  autocmd FileChangedShellPost * echohl WarningMsg | echo '🔄 检测到外部修改，已自动加载最新文件内容' | echohl None
+augroup END
 
 " 滚动时保留上下文
 set scrolloff=5
@@ -54,6 +80,7 @@ Plug 'ludovicchabant/vim-gutentags'
 Plug 'preservim/tagbar'
 Plug 'lambdalisue/fern.vim'
 Plug 'justinmk/vim-sneak'
+Plug 'airblade/vim-gitgutter'
 
 call plug#end()
 
@@ -359,28 +386,27 @@ let $FZF_DEFAULT_COMMAND = 'rg --files --hidden --follow --glob "!.git/*" --glob
 let g:fzf_layout = { 'down': '~40%' }
 let g:fzf_preview_window = ['right,50%,<70(up,40%)', 'ctrl-/']
 
-" 找项目根：从当前文件向上找常见的构建/版本控制标记
+" 找项目根：逐级向上查找最近的 .git 或构建文件标记（避免跨出当前仓库误匹配上级目录的散落文件）
 function! s:project_root(path) abort
-  let l:dir = isdirectory(a:path) ? a:path : fnamemodify(a:path, ':h')
+  let l:dir = isdirectory(a:path) ? fnamemodify(a:path, ':p:h') : fnamemodify(a:path, ':p:h')
   if empty(l:dir)
     let l:dir = getcwd()
   endif
-  for l:marker in ['go.mod', 'pom.xml', 'build.gradle', 'build.gradle.kts', 'package.json', 'composer.json']
-    let l:found = findfile(l:marker, l:dir . ';')
-    if !empty(l:found)
-      return fnamemodify(l:found, ':h')
+  let l:home = fnamemodify(expand('~'), ':p:h')
+  let l:markers = ['.git', 'go.mod', 'pom.xml', 'build.gradle', 'build.gradle.kts', 'package.json', 'composer.json', '.hg', '.svn']
+  let l:cur = l:dir
+  while !empty(l:cur) && l:cur !=# '/' && l:cur !=# l:home
+    for l:m in l:markers
+      if isdirectory(l:cur . '/' . l:m) || filereadable(l:cur . '/' . l:m)
+        return l:cur
+      endif
+    endfor
+    let l:parent = fnamemodify(l:cur, ':h')
+    if l:parent ==# l:cur
+      break
     endif
-  endfor
-  for l:marker in ['.git', '.hg', '.svn']
-    let l:found = finddir(l:marker, l:dir . ';')
-    if !empty(l:found)
-      return fnamemodify(l:found, ':h')
-    endif
-    let l:found = findfile(l:marker, l:dir . ';')   " .git 在 worktree/submodule 中可能是文件
-    if !empty(l:found)
-      return fnamemodify(l:found, ':h')
-    endif
-  endfor
+    let l:cur = l:parent
+  endwhile
   return l:dir
 endfunction
 
@@ -475,7 +501,88 @@ function! s:rg_visual() abort
   call HerdrSearchInDir(s:current_search_root(), l:q)
 endfunction
 
+" 最近访问项目记录与多项目一键切换 (<leader>fp)
+let s:recent_projects_file = expand('~/.cache/vim/recent_projects.txt')
+
+function! s:record_recent_project() abort
+  if &buftype !=# '' || &filetype =~# '^\(fern\|tagbar\|qf\|help\)$'
+    return
+  endif
+  let l:p = expand('%:p')
+  let l:root = empty(l:p) ? '' : s:project_root(l:p)
+  if empty(l:root) || !isdirectory(l:root) || l:root ==# expand('~')
+    return
+  endif
+  let l:dir = fnamemodify(s:recent_projects_file, ':h')
+  if !isdirectory(l:dir)
+    silent! call mkdir(l:dir, 'p', 0700)
+  endif
+  let l:lines = filereadable(s:recent_projects_file) ? readfile(s:recent_projects_file) : []
+  call filter(l:lines, '!empty(v:val) && v:val !=# l:root')
+  call insert(l:lines, l:root, 0)
+  silent! call writefile(l:lines[:49], s:recent_projects_file)
+endfunction
+
+augroup vim_recent_projects
+  autocmd!
+  autocmd VimEnter,BufEnter * call s:record_recent_project()
+augroup END
+
+function! s:switch_project_sink(line) abort
+  let l:parts = split(a:line, "\t")
+  if empty(l:parts)
+    return
+  endif
+  let l:dir = l:parts[0]
+  if !isdirectory(l:dir)
+    return
+  endif
+  execute 'cd' fnameescape(l:dir)
+  let l:lines = filereadable(s:recent_projects_file) ? readfile(s:recent_projects_file) : []
+  call filter(l:lines, '!empty(v:val) && v:val !=# l:dir')
+  call insert(l:lines, l:dir, 0)
+  silent! call writefile(l:lines[:49], s:recent_projects_file)
+  " 若左侧开了 fern 文件树，同步切到新项目根
+  for l:w in range(1, winnr('$'))
+    if getbufvar(winbufnr(l:w), '&filetype') ==# 'fern'
+      silent! execute 'Fern . -drawer'
+      wincmd p
+      break
+    endif
+  endfor
+  echomsg '📂 已切换项目: ' . l:dir
+  Files
+endfunction
+
+function! s:switch_project() abort
+  let l:script = expand('~/.vim/scripts/ask_ai.py')
+  if !executable('python3') || !filereadable(l:script)
+    echohl WarningMsg | echom '未找到 python3 或 ~/.vim/scripts/ask_ai.py' | echohl None
+    return
+  endif
+  let l:src = printf('python3 %s --list-projects %s %s',
+        \ shellescape(l:script),
+        \ shellescape(s:recent_projects_file),
+        \ shellescape(s:current_search_root()))
+  let l:preview = 'git -C {1} status -sb 2>/dev/null && echo "" && git -C {1} log --oneline --decorate --color=always -n 10 2>/dev/null || ls -la {1}'
+  let l:spec = {
+    \ 'source': l:src,
+    \ 'sink': function('s:switch_project_sink'),
+    \ 'options': [
+    \   '--ansi',
+    \   '-d', "\t",
+    \   '--with-nth', '2..',
+    \   '--tiebreak=index',
+    \   '--prompt', '切换项目 (Enter 切目录并找文件)> ',
+    \   '--preview', l:preview,
+    \   '--preview-window', 'right,50%,<70(up,40%)',
+    \ ],
+    \ }
+  call fzf#run(fzf#wrap('switch_project', l:spec, 0))
+endfunction
+
 nnoremap <silent> <leader>ff :Files<CR>
+nnoremap <silent> <leader>fp :call <SID>switch_project()<CR>
 nnoremap <silent> <leader>fg :call <SID>rg_project()<CR>
 vnoremap <silent> <leader>fg :<C-u>call <SID>rg_visual()<CR>
 nnoremap <silent> <leader>fb :Buffers<CR>
@@ -528,6 +635,160 @@ nnoremap <silent> <leader>e :Fern %:h -drawer -reveal=%<CR>
 let g:sneak#label = 1
 
 " ============================================================
+"  Git 阅读与追溯 (vim-gitgutter + FZF 文件提交历史 + 浮窗 Git Blame)
+" ============================================================
+let g:gitgutter_map_keys = 0
+nmap ]c <Plug>(GitGutterNextHunk)
+nmap [c <Plug>(GitGutterPrevHunk)
+nmap <leader>hp <Plug>(GitGutterPreviewHunk)
+nmap <leader>hu <Plug>(GitGutterUndoHunk)
+nmap <leader>hs <Plug>(GitGutterStageHunk)
+
+function! s:git_open_commit(root, file_rel, line) abort
+  let l:hash = matchstr(a:line, '^\S\+')
+  if empty(l:hash)
+    return
+  endif
+  let l:state = {'out': [], 'done': 0}
+  call job_start(['git', '-C', a:root, 'show', '--stat', '-p', l:hash, '--', a:file_rel], {
+    \ 'in_io': 'null',
+    \ 'err_io': 'null',
+    \ 'out_cb': {ch, msg -> add(l:state.out, msg)},
+    \ 'close_cb': {ch -> s:git_render_commit_split(l:hash, a:file_rel, l:state)},
+    \ })
+endfunction
+
+function! s:git_render_commit_split(hash, file_rel, state) abort
+  if a:state.done
+    return
+  endif
+  let a:state.done = 1
+  botright new
+  setlocal buftype=nofile bufhidden=wipe noswapfile filetype=git
+  silent! execute 'file git://' . a:hash . '/' . fnameescape(fnamemodify(a:file_rel, ':t'))
+  call setline(1, empty(a:state.out) ? ['(无改动内容)'] : a:state.out)
+  setlocal nomodifiable readonly
+  nnoremap <buffer> <silent> q :close<CR>
+endfunction
+
+function! s:git_file_commits() abort
+  let l:full = expand('%:p')
+  if empty(l:full) || !filereadable(l:full)
+    echohl WarningMsg | echom '当前窗口不是已保存的文件' | echohl None
+    return
+  endif
+  let l:root = s:project_root(l:full)
+  if !isdirectory(l:root . '/.git') && !filereadable(l:root . '/.git')
+    echohl WarningMsg | echom '当前文件不在 Git 仓库中' | echohl None
+    return
+  endif
+  let l:rel = stridx(l:full, l:root . '/') == 0 ? strpart(l:full, len(l:root) + 1) : l:full
+  let l:src = printf('git -C %s log --follow --color=always --date=short --format="%%C(yellow)%%h%%C(reset) %%C(green)%%ad%%C(reset) %%C(cyan)%%an%%C(reset): %%s" -- %s',
+        \ shellescape(l:root), shellescape(l:rel))
+  let l:prev = printf('git -C %s show --color=always {1} -- %s',
+        \ shellescape(l:root), shellescape(l:rel))
+  let l:spec = {
+    \ 'source': l:src,
+    \ 'sink': {line -> s:git_open_commit(l:root, l:rel, line)},
+    \ 'options': [
+    \   '--ansi',
+    \   '--tiebreak=index',
+    \   '--prompt', printf('文件历史 [%s]> ', fnamemodify(l:rel, ':t')),
+    \   '--preview', l:prev,
+    \   '--preview-window', 'right,60%,<70(up,50%)',
+    \ ],
+    \ }
+  call fzf#run(fzf#wrap('git_bcommits', l:spec, 0))
+endfunction
+
+function! s:git_blame_render(root, state) abort
+  if a:state.done
+    return
+  endif
+  let a:state.done = 1
+  if empty(a:state.out)
+    echohl WarningMsg | echom '未获取到该行的 Git Blame 信息（可能是新文件）' | echohl None
+    return
+  endif
+  let l:first = a:state.out[0]
+  let l:hash = matchstr(l:first, '^\x\+')
+  if empty(l:hash) || l:hash =~# '^0\+$'
+    call popup_atcursor([' ✨ 尚未提交的本地修改 (Uncommitted Changes) '], {
+      \ 'border': [],
+      \ 'padding': [0, 1, 0, 1],
+      \ 'moved': 'any',
+      \ 'mapping': 0,
+      \ })
+    return
+  endif
+  let l:log_state = {'out': [], 'done': 0}
+  call job_start([
+        \ 'git', '-C', a:root, 'show', '-s',
+        \ '--date=format:%Y-%m-%d %H:%M:%S',
+        \ '--format=Commit: %h (%ad, %ar)%nAuthor: %an <%ae>%n%n%B',
+        \ l:hash
+        \ ], {
+        \ 'in_io': 'null',
+        \ 'err_io': 'null',
+        \ 'out_cb': {ch, msg -> add(l:log_state.out, msg)},
+        \ 'close_cb': {ch -> s:git_blame_show_popup(l:log_state)},
+        \ })
+endfunction
+
+function! s:git_blame_popup_filter(winid, key) abort
+  if a:key ==# 'q' || a:key ==# "\<Esc>"
+    call popup_close(a:winid)
+    return 1
+  endif
+  return 0
+endfunction
+
+function! s:git_blame_show_popup(log_state) abort
+  if a:log_state.done
+    return
+  endif
+  let a:log_state.done = 1
+  let l:lines = copy(a:log_state.out)
+  while !empty(l:lines) && empty(trim(l:lines[-1]))
+    call remove(l:lines, -1)
+  endwhile
+  if empty(l:lines)
+    return
+  endif
+  call add(l:lines, '')
+  call add(l:lines, '[移动光标或按 q / Esc 关闭]')
+  call popup_atcursor(l:lines, {
+    \ 'border': [],
+    \ 'padding': [0, 1, 0, 1],
+    \ 'maxwidth': 78,
+    \ 'maxheight': 20,
+    \ 'wrap': 1,
+    \ 'moved': 'any',
+    \ 'filter': function('s:git_blame_popup_filter'),
+    \ })
+endfunction
+
+function! s:git_blame_line() abort
+  let l:full = expand('%:p')
+  if empty(l:full) || !filereadable(l:full)
+    echohl WarningMsg | echom '当前窗口不是已保存的文件' | echohl None
+    return
+  endif
+  let l:root = s:project_root(l:full)
+  let l:lnum = line('.')
+  let l:state = {'out': [], 'done': 0}
+  call job_start(['git', '-C', l:root, 'blame', '-L', l:lnum . ',' . l:lnum, '--porcelain', '--', l:full], {
+    \ 'in_io': 'null',
+    \ 'err_io': 'null',
+    \ 'out_cb': {ch, msg -> add(l:state.out, msg)},
+    \ 'close_cb': {ch -> s:git_blame_render(l:root, l:state)},
+    \ })
+endfunction
+
+nnoremap <silent> <leader>gc :call <SID>git_file_commits()<CR>
+nnoremap <silent> <leader>gb :call <SID>git_blame_line()<CR>
+
+" ============================================================
 "  杂项
 " ============================================================
 " 快速保存
@@ -570,7 +831,16 @@ nnoremap <silent> <leader>ai :call herdr_ai#ask('n', 1)<CR>
 xnoremap <silent> <leader>ai :<C-u>call herdr_ai#ask('v', 1)<CR>
 nnoremap <silent> <leader>aa :call herdr_ai#ask('n', 0)<CR>
 xnoremap <silent> <leader>aa :<C-u>call herdr_ai#ask('v', 0)<CR>
+nnoremap <silent> <leader>aq :call herdr_ai#ask_question('n', 0)<CR>
+xnoremap <silent> <leader>aq :<C-u>call herdr_ai#ask_question('v', 0)<CR>
+nnoremap <silent> <leader>aQ :call herdr_ai#ask_question('n', 1)<CR>
+xnoremap <silent> <leader>aQ :<C-u>call herdr_ai#ask_question('v', 1)<CR>
+nnoremap <silent> <leader>as :call herdr_ai#send_to_agent('n', 0)<CR>
+xnoremap <silent> <leader>as :<C-u>call herdr_ai#send_to_agent('v', 0)<CR>
+nnoremap <silent> <leader>aS :call herdr_ai#send_to_agent('n', 1)<CR>
+xnoremap <silent> <leader>aS :<C-u>call herdr_ai#send_to_agent('v', 1)<CR>
 nnoremap <silent> <leader>ah :call herdr_ai#browse_history()<CR>
+command! -nargs=* AIAsk call herdr_ai#ask_question('n', 0, <q-args>)
 command! AIHistory call herdr_ai#browse_history()
 
 " 终端里用鼠标滚动
@@ -910,6 +1180,7 @@ if has('menu')
   vnoremenu <silent> 10.30  PopUp.粘贴替换选中\ \ (Paste)     :<C-u>call <SID>ctx_paste('v')<CR>
   vnoremenu          10.40  PopUp.-sep1-                     :
   vnoremenu <silent> 10.50  PopUp.全文搜索选中\ \ (Space+fg)  :<C-u>call <SID>rg_visual()<CR>
+  vnoremenu <silent> 10.55  PopUp.发送到\ Agent\ (Space+as)    :<C-u>call herdr_ai#send_to_agent('v', 0)<CR>
   vnoremenu <silent> 10.60  PopUp.AI\ 分析选中\ \ \ (Space+aa) :<C-u>call herdr_ai#ask('v', 0)<CR>
   vnoremenu <silent> 10.70  PopUp.AI\ 选模型分析\ (Space+ai)  :<C-u>call herdr_ai#ask('v', 1)<CR>
 
@@ -922,7 +1193,9 @@ if has('menu')
   nnoremenu <silent> 10.70  PopUp.查找接口实现\ \ (gi)          :call <SID>lsp_fzf_location('implementation', 'Implementations (具体实现)')<CR>
   nnoremenu <silent> 10.80  PopUp.全文搜索当前词\ (Space+fg)    :call <SID>ctx_rg_cword()<CR>
   nnoremenu          10.90  PopUp.-sep2-                       :
+  nnoremenu <silent> 10.95  PopUp.发送到\ Agent\ \ \ (Space+as)   :call herdr_ai#send_to_agent('n', 0)<CR>
   nnoremenu <silent> 10.100 PopUp.AI\ 分析方法\ \ \ (Space+aa)   :call herdr_ai#ask('n', 0)<CR>
+  nnoremenu <silent> 10.105 PopUp.Git\ Blame\ 当前行\ (Space+gb)  :call <SID>git_blame_line()<CR>
   nnoremenu <silent> 10.110 PopUp.复制路径与行号\ (Path)        :call <SID>ctx_copy_path()<CR>
 
   inoremenu <silent> 10.10  PopUp.粘贴\ \ \ \ \ \ \ \ (Paste)     <C-o>:call <SID>ctx_paste('i')<CR>
@@ -1010,11 +1283,13 @@ if !has('gui_running') && exists('*popup_menu')
       endif
       call s:rg_visual()
     elseif a:result == 6
+      call herdr_ai#send_to_agent('v', 0)
+    elseif a:result == 7
       if mode() =~# "[vV\<C-v>]"
         silent execute "normal! \<Esc>"
       endif
       call herdr_ai#ask('v', 0)
-    elseif a:result == 7
+    elseif a:result == 8
       if mode() =~# "[vV\<C-v>]"
         silent execute "normal! \<Esc>"
       endif
@@ -1029,6 +1304,7 @@ if !has('gui_running') && exists('*popup_menu')
       \ '粘贴替换选中  (Paste)',
       \ '──────────────────────────',
       \ '全文搜索选中  (Space+fg)',
+      \ '发送到 Agent  (Space+as)',
       \ 'AI 分析选中   (Space+aa)',
       \ 'AI 选模型分析 (Space+ai)',
       \ ], s:ctx_popup_opts(function('s:ctx_visual_popup_cb')))
